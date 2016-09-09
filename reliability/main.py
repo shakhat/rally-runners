@@ -46,6 +46,7 @@ def main():
     e_median = np.median(etalon)
     e_p95 = np.percentile(etalon, 95)
 
+    print('Hook time: %s' % (hook_time - start))
     print('There are %s etalon samples' % len(etalon))
     print('Etalon median: %s' % e_median)
     print('Etalon 95%% percentile: %s' % e_p95)
@@ -115,7 +116,10 @@ def main():
     # y2 = [1 if p['error'] else 0 for p in table]
     x2 = [p['timestamp'] - start for p in table if p['error']]
     y2 = [p['duration'] for p in table if p['error']]
-    plt.plot(x, y, 'b', x2, y2, 'r', medians_x, medians_y, 'g')
+    plt.plot(x, y, 'b.', x2, y2, 'r.', medians_x, medians_y, 'g')
+    plt.axvline(hook_time - start, color='cyan')
+    plt.axvline(first_error_timestamp - start, color='orange')
+    plt.axvline(last_error_timestamp - start, color='lime')
     plt.grid(True)
     plt.show()
 
