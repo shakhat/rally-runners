@@ -34,12 +34,13 @@ WINDOW_SIZE = 21
 
 MinMax = collections.namedtuple('MinMax', ('min', 'max'))
 Mean = collections.namedtuple('Mean', ('statistic', 'minmax'))
+MeanVar = collections.namedtuple('MeanVar', ('statistic', 'var'))
 Cluster = collections.namedtuple('Cluster', ['start', 'end'])
 ErrorClusterStats = collections.namedtuple(
-    'ErrorClusterStats', ['start', 'end', 'duration', 'variance', 'count'])
+    'ErrorClusterStats', ['start', 'end', 'duration', 'count'])
 AnomalyClusterStats = collections.namedtuple(
     'AnomalyClusterStats',
-    ['start', 'end', 'duration', 'variance', 'count', 'difference'])
+    ['start', 'end', 'duration', 'count', 'difference'])
 RunResult = collections.namedtuple(
     'RunResult', ['errors', 'anomalies', 'etalon', 'plot'])
 
@@ -138,18 +139,19 @@ def process_one_run(data):
         start_idx = cluster.start
         end_idx = cluster.end
         d_start = (table[start_idx]['timestamp'] -
-                   table[start_idx - 1]['timestamp'])
-        d_end = (table[end_idx + 1]['timestamp'] - table[end_idx]['timestamp'])
-        start_ts = table[start_idx]['timestamp'] - d_start / 2
-        end_ts = table[end_idx]['timestamp'] + d_end / 2
-        var = (d_start + d_end) / 2
-        dur = (end_ts - start_ts) / 2
-        print('Error duration %s, variance: %s' % (dur, var))
+                   table[start_idx - 1]['timestamp']) / 2
+        d_end = (table[end_idx + 1]['timestamp'] -
+                 table[end_idx]['timestamp']) / 2
+        start_ts = table[start_idx]['timestamp'] - d_start
+        end_ts = table[end_idx]['timestamp'] + d_end
+        var = d_start + d_end
+        duration = end_ts - start_ts
+        print('Error duration %s, variance: %s' % (duration, var))
         count = sum(1 if p['error'] else 0 for p in table)
         print('Count: %s' % count)
 
         error_stats.append(ErrorClusterStats(
-            start=start_ts, end=end_ts, duration=dur, variance=var,
+            start=start_ts, end=end_ts, duration=MeanVar(duration, var),
             count=count))
 
     # process non-error data
@@ -226,13 +228,14 @@ def process_one_run(data):
         # start_idx += WINDOW_SIZE - 1
 
         d_start = (table[start_idx]['timestamp'] -
-                   table[start_idx - 1]['timestamp'])
-        d_end = (table[end_idx + 1]['timestamp'] - table[end_idx]['timestamp'])
-        start_ts = table[start_idx]['timestamp'] - d_start / 2
-        end_ts = table[end_idx]['timestamp'] + d_end / 2
-        var = (d_start + d_end) / 2
-        dur = (end_ts - start_ts) / 2
-        print('Anomaly duration %s, variance: %s' % (dur, var))
+                   table[start_idx - 1]['timestamp']) / 2
+        d_end = (table[end_idx + 1]['timestamp'] -
+                 table[end_idx]['timestamp']) / 2
+        start_ts = table[start_idx]['timestamp'] - d_start
+        end_ts = table[end_idx]['timestamp'] + d_end
+        var = d_start + d_end
+        duration = end_ts - start_ts
+        print('Anomaly duration %s, variance: %s' % (duration, var))
 
         length = end_idx - start_idx + 1
         print('Anomaly length: %s' % length)
@@ -245,14 +248,15 @@ def process_one_run(data):
         mean_diff = anomaly_mean - etalon_mean
         conf_interval = stats.t.interval(0.95, dof, loc=mean_diff, scale=se)
 
-        difference = Mean(mean_diff,
-                          MinMax(conf_interval[0], conf_interval[1]))
+        difference = MeanVar(mean_diff,
+                             np.mean([mean_diff - conf_interval[0],
+                                      conf_interval[1] - mean_diff]))
 
         print('Mean diff: %s' % mean_diff)
         print('Conf int: %s' % str(conf_interval))
 
         anomaly_stats.append(AnomalyClusterStats(
-            start=start_ts, end=end_ts, duration=dur, variance=var,
+            start=start_ts, end=end_ts, duration=MeanVar(duration, var),
             difference=difference, count=length
         ))
 
@@ -296,8 +300,6 @@ def process_one_run(data):
     for label in legend.get_texts():
         label.set_fontsize('small')
 
-    plt.show()
-
     return RunResult(
         errors=error_stats,
         anomalies=anomaly_stats,
@@ -306,16 +308,73 @@ def process_one_run(data):
     )
 
 
+def round2(number, variance):
+    return round(number, int(math.ceil(-(math.log10(variance)))))
+
+
+def mean_var_to_str(mv):
+    precision = int(math.ceil(-(math.log10(mv.var))))
+    if precision > 0:
+        pattern = '%%.%df' % (precision + 1)
+    else:
+        pattern = '%%d'
+
+    return '%s ~%s' % (pattern % round(mv.statistic, precision), pattern % round(mv.var, precision + 1))
+
+
 def process(data, book_folder):
+    downtime_statistic = []
+    downtime_var = []
+    ttr_statistic = []
+    ttr_var = []
+    slowdown_statistic = []
+    slowdown_var = []
+
     for i, one_run in enumerate(data):
         res = process_one_run(one_run)
         print('Res: %s' % str(res))
 
-        res.plot.savefig(os.path.join(book_folder, 'plot_%02d' % i))
+        res.plot.savefig(os.path.join(book_folder, 'plot_%02d.svg' % i))
 
-        # headers = ["Error Count", "Error Duration", "Anomaly Duration"]
-        # s = tabulate([res.errors.count], headers=headers, tablefmt="grid")
-        # print(s)
+        headers = ['#', 'Count', 'Downtime, s']
+        t = []
+        ds = 0
+        for idx, stat in enumerate(res.errors):
+            t.append([idx + 1, stat.count, mean_var_to_str(stat.duration)])
+            ds += stat.duration.statistic
+            downtime_var.append(stat.duration.var)
+
+        downtime_statistic.append(ds)
+
+        s = tabulate(t, headers=headers, tablefmt="grid")
+        print(s)
+
+        headers = ['#', 'Count', 'Time to recover, s', 'Operation slowdown, s']
+        t = []
+        ts = ss = 0
+        for idx, stat in enumerate(res.anomalies):
+            t.append([idx + 1, stat.count, mean_var_to_str(stat.duration),
+                      mean_var_to_str(stat.difference)])
+            ts += stat.duration.statistic
+            ttr_var.append(stat.duration.var)
+            ss += stat.difference.statistic
+            slowdown_var.append(stat.difference.var)
+
+        ttr_statistic.append(ts)
+        slowdown_statistic.append(ss)
+
+        s = tabulate(t, headers=headers, tablefmt="grid")
+        print(s)
+
+    downtime = MeanVar(np.mean(downtime_statistic), np.mean(downtime_var))
+    mttr = MeanVar(np.mean(ttr_statistic), np.mean(ttr_var))
+    slowdown = MeanVar(np.mean(slowdown_statistic), np.mean(slowdown_var))
+
+    headers = ['Downtime, s', 'MTTR, s', 'Operation slowdown, s']
+    t = [[mean_var_to_str(downtime), mean_var_to_str(mttr),
+          mean_var_to_str(slowdown)]]
+    s = tabulate(t, headers=headers, tablefmt="grid")
+    print(s)
 
 
 def main():
