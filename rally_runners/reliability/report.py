@@ -24,6 +24,7 @@ import errno
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import stats
+from tabulate import tabulate
 
 
 MAX_GAP = 6
@@ -247,12 +248,12 @@ def process_one_run(data):
 
     # highlight errors
     for c in error_stats:
-        plt.axvspan(c.start, c.end, color='red', alpha=0.2,
+        plt.axvspan(c.start, c.end, color='red', alpha=0.4,
                     label='Errors area')
 
     # highlight anomalies
     for c in anomaly_stats:
-        plt.axvspan(c.start, c.end, color='yellow', alpha=0.1,
+        plt.axvspan(c.start, c.end, color='orange', alpha=0.2,
                     label='Anomaly area')
 
     # draw mean
@@ -278,11 +279,15 @@ def process_one_run(data):
 
 
 def process(data, book_folder):
-    for i, one_run in enumerate(data):
+    for i, one_run in enumerate(data[1:2]):
         res = process_one_run(one_run)
+        print('Res: %s' % str(res))
 
         res.plot.savefig(os.path.join(book_folder, 'plot_%02d' % i))
-        print('Res: %s' % str(res))
+
+        # headers = ["Error Count", "Error Duration", "Anomaly Duration"]
+        # s = tabulate([res.errors.count], headers=headers, tablefmt="grid")
+        # print(s)
 
 
 def main():

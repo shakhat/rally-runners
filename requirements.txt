@@ -7,3 +7,4 @@ pbr>=1.6 # Apache-2.0
 matplotlib
 numpy
 scipy
+tabulate
