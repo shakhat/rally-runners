@@ -1,3 +1,5 @@
+# coding=utf-8
+
 # Licensed under the Apache License, Version 2.0 (the "License"); you may
 # not use this file except in compliance with the License. You may obtain
 # a copy of the License at
@@ -13,36 +15,74 @@
 from __future__ import print_function
 
 import argparse
+import collections
 import json
+import math
 
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy import stats
+
+
+MAX_GAP = 6
+WINDOW_SIZE = 21
+
+
+Cluster = collections.namedtuple('Cluster', ['start', 'end'])
+ErrorClusterStats = collections.namedtuple(
+    'ErrorClusterStats', ['start', 'end', 'duration', 'variance', 'count'])
+AnomalyClusterStats = collections.namedtuple(
+    'AnomalyClusterStats',
+    ['start', 'end', 'duration', 'variance', 'count', 'difference'])
+RunResult = collections.namedtuple(
+    'RunResult', ['errors', 'anomalies', 'etalon'])
+
+
+def find_clusters(arr, filter_fn, max_gap=MAX_GAP):
+    # filter_fn: y -> [0, 1]
+    clusters = []  # [(start, end)]
+
+    start = None
+    end = None
+
+    for i, y in enumerate(arr):
+        v = filter_fn(y)
+        if v:
+            if not start:
+                start = i
+            end = i
+        else:
+            if end and i - end > max_gap:
+                clusters.append(Cluster(start, end))
+                start = end = None
+
+    if end:
+        clusters.append(Cluster(start, end))
+
+    return clusters
 
 
 def process_one_run(data):
 
     table = []
-    points = []
     etalon = []
-    hook_start_time = 0
-    shock_start_index = 0  # iteration # when the hook started
-    shock_end_index = 0  # iteration # when the last error observed
 
     results = data['result']
     hooks = data['hooks']
 
-    if not results:
+    if not results or not hooks:
         return  # skip empty
 
     start = results[0]['timestamp']  # start of the run
     hook_start_time = hooks[0]['started_at'] - start  # when the hook started
-    hook_end_time = hooks[0]['finished_at'] - start  # when the hook finished
 
+    # convert Rally data into our table
     for idx, result in enumerate(results):
         timestamp = result['timestamp'] - start
         duration = result['duration']
 
         row = {
+            'idx': idx,
             'timestamp': timestamp,
             'duration': duration,
             'error': bool(result['error']),
@@ -50,108 +90,157 @@ def process_one_run(data):
 
         if timestamp + duration < hook_start_time:
             etalon.append(duration)
-            shock_start_index = idx
 
-        points.append(duration)
         table.append(row)
 
     etalon = np.array(etalon)
-    e_median = np.median(etalon)
-    e_p95 = np.percentile(etalon, 95)
+    etalon_mean = np.mean(etalon)
+    etalon_median = np.median(etalon)
+    etalon_mean_sem = stats.sem(etalon)
+    etalon_p95 = np.percentile(etalon, 95)
+    etalon_var = np.var(etalon)
 
     print('Hook time: %s' % hook_start_time)
     print('There are %s etalon samples' % len(etalon))
-    print('Etalon median: %s' % e_median)
-    print('Etalon 95%% percentile: %s' % e_p95)
+    print('Etalon mean: %s (±%s)' % (etalon_mean, etalon_mean_sem))
+    print('Etalon median: %s' % etalon_median)
+    print('Etalon 95%% percentile: %s' % etalon_p95)
+    print('Variance: %s' % etalon_var)
+    print('Normal test: %s' % str(stats.normaltest(etalon)))
+    print('Bayes: %s' % str(stats.bayes_mvs(etalon, 0.95)))
 
     # find errors
-    first_error_index = None
-    first_error_timestamp = None
-    last_error_index = None
-    last_error_timestamp = None
-    shock_end_index = shock_start_index
-    error_count = 0
+    error_clusters = find_clusters(
+        (p['error'] for p in table),
+        filter_fn=lambda x: 1 if x else 0
+    )
+    print('Error clusters: %s' % error_clusters)
 
-    for idx, point in enumerate(table):
-        if point['error'] and not first_error_timestamp:
-            first_error_timestamp = point['timestamp']
-            first_error_index = idx
-        if point['error']:
-            last_error_timestamp = point['timestamp']
-            last_error_index = idx
-            shock_end_index = idx
-            error_count += 1
+    error_stats = []
 
-    error_rate = None
-    if error_count:
-        error_rate = float(error_count /
-                           (last_error_index - first_error_index + 1))
+    for cluster in error_clusters:
+        start_idx = cluster.start
+        end_idx = cluster.end
+        d_start = (table[start_idx]['timestamp'] -
+                   table[start_idx - 1]['timestamp'])
+        d_end = (table[end_idx + 1]['timestamp'] - table[end_idx]['timestamp'])
+        start_ts = table[start_idx]['timestamp'] - d_start / 2
+        end_ts = table[end_idx]['timestamp'] + d_end / 2
+        var = (d_start + d_end) / 2
+        dur = (end_ts - start_ts) / 2
+        print('Error duration %s, variance: %s' % (dur, var))
+        count = sum(1 if p['error'] else 0 for p in table)
+        print('Count: %s' % count)
 
-    downtime = None
-    has_errors = first_error_timestamp and last_error_timestamp
-    if has_errors:
-        downtime = last_error_timestamp - first_error_timestamp
+        error_stats.append(ErrorClusterStats(
+            start=start_ts, end=end_ts, duration=dur, variance=var,
+            count=count))
 
-    print('Downtime: %s' % downtime)
-    print('Error rate during downtime: %s%%' % (error_rate * 100))
+    # process non-error data
+    table_filtered = [p for p in table if not p['error']]  # rm errors
 
-    if has_errors:
-        post = [p['duration'] for p in table
-                if p['timestamp'] > last_error_timestamp]
-    else:
-        post = [p['duration'] for p in table
-                if p['timestamp'] > hook_start_time]
+    mean_idx = []
+    mean_derivative_y = []
+    mean_x = []
+    mean_y = []
 
-    print('There are %s post samples' % len(post))
+    for i in range(0, len(table_filtered) - WINDOW_SIZE):
+        durations = [p['duration'] for p in table_filtered[i: i + WINDOW_SIZE]]
 
-    post = np.array(post)
+        mean = np.mean(durations)
 
-    window_size = 21
-    medians_x = []
-    medians_y = []
+        idx = table_filtered[i]['idx']  # current index of window start
+        mean_idx.append(idx)
+        mean_y.append(mean)
+        mean_x.append(np.mean(
+            [p['timestamp'] for p in table_filtered[i: i + WINDOW_SIZE]]))
 
-    for i in range(0, len(table) - window_size):
-        cur_median = np.median(
-            [p['duration'] for p in table[i: i + window_size]])
-        cur_95p = np.percentile(
-            [p['duration'] for p in table[i: i + window_size]], 95)
-        medians_x.append(np.mean(
-            [p['timestamp'] for p in table[i: i + window_size]]))
-        medians_y.append(cur_median)
+        if len(mean_y) > 1:
+            # calculate derivative
+            mean_prev = mean_y[-2]
+            loc = mean - mean_prev
+            mean_derivative_y.append(loc)
 
-    out_liers = np.array([(p['timestamp'], p['duration']) for p in table
-                          if p['duration'] > e_p95 * 2])
-    print('Outliers: %s' % len(out_liers))
-    out_liers_duration = 0
-    if len(out_liers):
-        out_liers_end = out_liers[-1][0]
-        degradation_start = min(first_error_timestamp, out_liers[0][0])
-        out_liers_duration = out_liers_end - degradation_start
+    etalon_derivative_mean = np.mean(mean_derivative_y[:len(etalon)])
+    etalon_derivative_s = np.std(mean_derivative_y[:len(etalon)])
 
-        ps = [p['duration'] for p in table
-              if degradation_start <= p['timestamp'] <= out_liers_end]
-        ps_median = np.median(ps)
-        degradation = ps_median / e_median
-        print('Performance degradation: %s' % degradation)
+    # find anomalies
+    anomalies = find_clusters(
+        mean_derivative_y,
+        filter_fn=lambda y: 0 if abs(y) < abs(etalon_derivative_mean +
+                                              5 * etalon_derivative_s) else 1
+    )
 
-    print('Outliers duration: %s' % out_liers_duration)
+    print('Anomalies: %s' % anomalies)
+    anomaly_stats = []
 
+    for cluster in anomalies:
+        start_idx = mean_idx[cluster.start]  # back to original indexing
+        end_idx = mean_idx[cluster.end]
+
+        # it means that this item impacted the mean value and caused window
+        # to be distinguished
+        start_idx += WINDOW_SIZE - 1
+
+        d_start = (table[start_idx]['timestamp'] -
+                   table[start_idx - 1]['timestamp'])
+        d_end = (table[end_idx + 1]['timestamp'] - table[end_idx]['timestamp'])
+        start_ts = table[start_idx]['timestamp'] - d_start / 2
+        end_ts = table[end_idx]['timestamp'] + d_end / 2
+        var = (d_start + d_end) / 2
+        dur = (end_ts - start_ts) / 2
+        print('Anomaly duration %s, variance: %s' % (dur, var))
+
+        length = end_idx - start_idx + 1
+        print('Anomaly length: %s' % length)
+
+        durations = [p['duration'] for p in table[start_idx: end_idx + 1]]
+        anomaly_mean = np.mean(durations)
+        anomaly_var = np.var(durations)
+        se = math.sqrt(anomaly_var / length + etalon_var / len(etalon))
+        dof = len(etalon) + length - 2
+        mean_diff = anomaly_mean - etalon_mean
+        conf_interval = stats.t.interval(0.95, dof, loc=mean_diff, scale=se)
+
+        print('Mean diff: %s' % mean_diff)
+        print('Conf int: %s' % str(conf_interval))
+
+        anomaly_stats.append(AnomalyClusterStats(
+            start=start_ts, end=end_ts, duration=dur, variance=var,
+            difference=mean_diff, count=length
+        ))
+
+    # print stats
+    print('Error clusters: %s' % error_stats)
+    print('Anomaly clusters: %s' % anomaly_stats)
+
+    # draw the plot
     x = [p['timestamp'] for p in table]
     y = [p['duration'] for p in table]
-    # y2 = [1 if p['error'] else 0 for p in table]
+
     x2 = [p['timestamp'] for p in table if p['error']]
     y2 = [p['duration'] for p in table if p['error']]
 
     plt.plot(x, y, 'b.', x2, y2, 'r.')
-    plt.axvline(hook_start_time, color='orange')
-    plt.axvline(hook_end_time, color='orange')
-    plt.axvspan(degradation_start, out_liers_end, color='cyan', alpha=0.1)
-    plt.axvspan(first_error_timestamp, last_error_timestamp, color='red',
-                alpha=0.25)
-    # plt.axvline(first_error_timestamp, color='red')
-    # plt.axvline(last_error_timestamp, color='red')
-    plt.plot(out_liers[:, 0], out_liers[:, 1], 'c.')
-    plt.plot(medians_x, medians_y, 'g')
+
+    # highlight etalon
+    plt.axvspan(0, table[len(etalon)]['timestamp'],
+                color='lime', alpha=0.1)
+
+    # hook start
+    # plt.axvline(hook_start_time, color='grey')
+
+    # highlight errors
+    for c in error_stats:
+        plt.axvspan(c.start, c.end, color='red', alpha=0.2)
+
+    # highlight anomalies
+    for c in anomaly_stats:
+        plt.axvspan(c.start, c.end, color='yellow', alpha=0.1)
+
+    # draw mean
+    plt.plot(mean_x, mean_y, 'cyan')
+
     plt.grid(True)
     plt.xlabel('time, s')
     plt.ylabel('duration, s')
