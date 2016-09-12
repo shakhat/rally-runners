@@ -24,6 +24,7 @@ import errno
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import stats
+from sklearn import cluster as skl
 from tabulate import tabulate
 
 
@@ -154,6 +155,33 @@ def process_one_run(data):
     # process non-error data
     table_filtered = [p for p in table if not p['error']]  # rm errors
 
+    # apply MeanShift clustering algorithm
+    x = [p['duration'] for p in table_filtered]
+    X = np.array(zip(x, np.zeros(len(x))), dtype=np.float)
+    bandwidth = skl.estimate_bandwidth(X, quantile=0.3)
+    ms = skl.MeanShift(bandwidth=bandwidth, bin_seeding=True)
+    ms.fit(X)
+    labels = ms.labels_
+    cluster_centers = ms.cluster_centers_
+    labels_unique = np.unique(labels)
+    n_clusters_ = len(labels_unique)
+    lm = stats.mode(labels)
+
+    for k in range(n_clusters_):
+        my_members = labels == k
+        print('cluster {0}: {1}'.format(k, X[my_members, 0]))
+
+    vl = []
+    for i, p in enumerate(x):
+        vl.append(0 if labels[i] == lm.mode else 1)
+
+    anomalies = find_clusters(
+        vl,
+        filter_fn=lambda y: y
+    )
+
+    # calculate means
+
     mean_idx = []
     mean_derivative_y = []
     mean_x = []
@@ -180,11 +208,11 @@ def process_one_run(data):
     etalon_derivative_s = np.std(mean_derivative_y[:len(etalon)])
 
     # find anomalies
-    anomalies = find_clusters(
-        mean_derivative_y,
-        filter_fn=lambda y: 0 if abs(y) < abs(etalon_derivative_mean +
-                                              5 * etalon_derivative_s) else 1
-    )
+    # anomalies = find_clusters(
+    #     mean_derivative_y,
+    #     filter_fn=lambda y: 0 if abs(y) < abs(etalon_derivative_mean +
+    #                                           5 * etalon_derivative_s) else 1
+    # )
 
     print('Anomalies: %s' % anomalies)
     anomaly_stats = []
@@ -195,7 +223,7 @@ def process_one_run(data):
 
         # it means that this item impacted the mean value and caused window
         # to be distinguished
-        start_idx += WINDOW_SIZE - 1
+        # start_idx += WINDOW_SIZE - 1
 
         d_start = (table[start_idx]['timestamp'] -
                    table[start_idx - 1]['timestamp'])
@@ -279,7 +307,7 @@ def process_one_run(data):
 
 
 def process(data, book_folder):
-    for i, one_run in enumerate(data[1:2]):
+    for i, one_run in enumerate(data):
         res = process_one_run(one_run)
         print('Res: %s' % str(res))
 
