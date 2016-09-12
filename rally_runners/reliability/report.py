@@ -18,7 +18,9 @@ import argparse
 import collections
 import json
 import math
+import os
 
+import errno
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import stats
@@ -28,6 +30,8 @@ MAX_GAP = 6
 WINDOW_SIZE = 21
 
 
+MinMax = collections.namedtuple('MinMax', ('min', 'max'))
+Mean = collections.namedtuple('Mean', ('statistic', 'minmax'))
 Cluster = collections.namedtuple('Cluster', ['start', 'end'])
 ErrorClusterStats = collections.namedtuple(
     'ErrorClusterStats', ['start', 'end', 'duration', 'variance', 'count'])
@@ -35,7 +39,17 @@ AnomalyClusterStats = collections.namedtuple(
     'AnomalyClusterStats',
     ['start', 'end', 'duration', 'variance', 'count', 'difference'])
 RunResult = collections.namedtuple(
-    'RunResult', ['errors', 'anomalies', 'etalon'])
+    'RunResult', ['errors', 'anomalies', 'etalon', 'plot'])
+
+
+def mkdir_tree(path):
+    try:
+        os.makedirs(path)
+    except OSError as exc:
+        if exc.errno == errno.EEXIST and os.path.isdir(path):
+            pass
+        else:
+            raise
 
 
 def find_clusters(arr, filter_fn, max_gap=MAX_GAP):
@@ -202,12 +216,15 @@ def process_one_run(data):
         mean_diff = anomaly_mean - etalon_mean
         conf_interval = stats.t.interval(0.95, dof, loc=mean_diff, scale=se)
 
+        difference = Mean(mean_diff,
+                          MinMax(conf_interval[0], conf_interval[1]))
+
         print('Mean diff: %s' % mean_diff)
         print('Conf int: %s' % str(conf_interval))
 
         anomaly_stats.append(AnomalyClusterStats(
             start=start_ts, end=end_ts, duration=dur, variance=var,
-            difference=mean_diff, count=length
+            difference=difference, count=length
         ))
 
     # print stats
@@ -221,31 +238,51 @@ def process_one_run(data):
     x2 = [p['timestamp'] for p in table if p['error']]
     y2 = [p['duration'] for p in table if p['error']]
 
-    plt.plot(x, y, 'b.', x2, y2, 'r.')
+    plt.plot(x, y, 'b.', label='Successful operations')
+    plt.plot(x2, y2, 'r.', label='Failed operations')
 
     # highlight etalon
     plt.axvspan(0, table[len(etalon)]['timestamp'],
-                color='lime', alpha=0.1)
-
-    # hook start
-    # plt.axvline(hook_start_time, color='grey')
+                color='lime', alpha=0.1, label='Etalon area')
 
     # highlight errors
     for c in error_stats:
-        plt.axvspan(c.start, c.end, color='red', alpha=0.2)
+        plt.axvspan(c.start, c.end, color='red', alpha=0.2,
+                    label='Errors area')
 
     # highlight anomalies
     for c in anomaly_stats:
-        plt.axvspan(c.start, c.end, color='yellow', alpha=0.1)
+        plt.axvspan(c.start, c.end, color='yellow', alpha=0.1,
+                    label='Anomaly area')
 
     # draw mean
-    plt.plot(mean_x, mean_y, 'cyan')
+    plt.plot(mean_x, mean_y, 'cyan', label='Mean duration')
 
     plt.grid(True)
     plt.xlabel('time, s')
     plt.ylabel('duration, s')
-    plt.savefig("test.svg")
+
+    # add legend
+    legend = plt.legend(loc='right', shadow=True)
+    for label in legend.get_texts():
+        label.set_fontsize('small')
+
     plt.show()
+
+    return RunResult(
+        errors=error_stats,
+        anomalies=anomaly_stats,
+        plot=plt,
+        etalon=stats.bayes_mvs(etalon, 0.95),
+    )
+
+
+def process(data, book_folder):
+    for i, one_run in enumerate(data):
+        res = process_one_run(one_run)
+
+        res.plot.savefig(os.path.join(book_folder, 'plot_%02d' % i))
+        print('Res: %s' % str(res))
 
 
 def main():
@@ -260,9 +297,9 @@ def main():
     with open(file_name) as fd:
         data = json.loads(fd.read())
 
-    for one_run in data:
-        process_one_run(one_run)
-        break
+    book_folder = args.book
+    mkdir_tree(book_folder)
+    process(data, book_folder)
 
 
 if __name__ == '__main__':
