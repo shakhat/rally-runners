@@ -313,13 +313,15 @@ def round2(number, variance):
 
 
 def mean_var_to_str(mv):
-    precision = int(math.ceil(-(math.log10(mv.var))))
+    precision = int(math.ceil(-(math.log10(mv.var)))) + 1
     if precision > 0:
-        pattern = '%%.%df' % (precision + 1)
+        pattern = '%%.%df' % precision
+        pattern_1 = '%%.%df' % (precision)
     else:
-        pattern = '%%d'
+        pattern = pattern_1 = '%%d'
 
-    return '%s ~%s' % (pattern % round(mv.statistic, precision), pattern % round(mv.var, precision + 1))
+    return '%s ~%s' % (pattern % round(mv.statistic, precision),
+                       pattern_1 % round(mv.var, precision + 1))
 
 
 def process(data, book_folder):
@@ -335,6 +337,7 @@ def process(data, book_folder):
         print('Res: %s' % str(res))
 
         res.plot.savefig(os.path.join(book_folder, 'plot_%02d.svg' % i))
+        # res.plot.show()
 
         headers = ['#', 'Count', 'Downtime, s']
         t = []
@@ -373,7 +376,7 @@ def process(data, book_folder):
     headers = ['Downtime, s', 'MTTR, s', 'Operation slowdown, s']
     t = [[mean_var_to_str(downtime), mean_var_to_str(mttr),
           mean_var_to_str(slowdown)]]
-    s = tabulate(t, headers=headers, tablefmt="grid")
+    s = str(tabulate(t, headers=headers, tablefmt="grid")).replace('~', '±')
     print(s)
 
 
