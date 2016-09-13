@@ -87,11 +87,17 @@ def process_one_run(data):
     results = data['result']
     hooks = data['hooks']
 
-    if not results or not hooks:
+    if not results:
         return  # skip empty
 
     start = results[0]['timestamp']  # start of the run
-    hook_start_time = hooks[0]['started_at'] - start  # when the hook started
+
+    if hooks:
+        # when the hook started
+        hook_start_time = hooks[0]['started_at'] - start
+    else:
+        # let all data be etalon
+        hook_start_time = results[-1]['timestamp']
 
     # convert Rally data into our table
     for idx, result in enumerate(results):
@@ -160,7 +166,7 @@ def process_one_run(data):
     # apply MeanShift clustering algorithm
     x = [p['duration'] for p in table_filtered]
     X = np.array(zip(x, np.zeros(len(x))), dtype=np.float)
-    bandwidth = skl.estimate_bandwidth(X, quantile=0.3)
+    bandwidth = skl.estimate_bandwidth(X, quantile=0.6)
     ms = skl.MeanShift(bandwidth=bandwidth, bin_seeding=True)
     ms.fit(X)
     labels = ms.labels_
@@ -182,12 +188,18 @@ def process_one_run(data):
         filter_fn=lambda y: y
     )
 
+    if not hooks:  # disable anomalies when no hooks specified
+        anomalies = []
+
     # calculate means
 
     mean_idx = []
     mean_derivative_y = []
     mean_x = []
     mean_y = []
+
+    if len(table_filtered) <= WINDOW_SIZE:
+        raise Exception('Not enough data points')
 
     for i in range(0, len(table_filtered) - WINDOW_SIZE):
         durations = [p['duration'] for p in table_filtered[i: i + WINDOW_SIZE]]
@@ -218,10 +230,12 @@ def process_one_run(data):
 
     print('Anomalies: %s' % anomalies)
     anomaly_stats = []
+    filtered2original = dict()
 
     for cluster in anomalies:
-        start_idx = mean_idx[cluster.start]  # back to original indexing
-        end_idx = mean_idx[cluster.end]
+        # back to original indexing
+        start_idx = table_filtered[cluster.start]['idx']
+        end_idx = table_filtered[cluster.end]['idx']
 
         # it means that this item impacted the mean value and caused window
         # to be distinguished
@@ -273,10 +287,12 @@ def process_one_run(data):
 
     plt.plot(x, y, 'b.', label='Successful operations')
     plt.plot(x2, y2, 'r.', label='Failed operations')
+    plt.ylim(0)
 
     # highlight etalon
-    plt.axvspan(0, table[len(etalon)]['timestamp'],
-                color='lime', alpha=0.1, label='Etalon area')
+    if hooks:
+        plt.axvspan(0, table[len(etalon) - 1]['timestamp'],
+                    color='lime', alpha=0.1, label='Etalon area')
 
     # highlight errors
     for c in error_stats:
@@ -318,10 +334,14 @@ def mean_var_to_str(mv):
         pattern = '%%.%df' % precision
         pattern_1 = '%%.%df' % (precision)
     else:
-        pattern = pattern_1 = '%%d'
+        pattern = pattern_1 = '%d'
 
     return '%s ~%s' % (pattern % round(mv.statistic, precision),
                        pattern_1 % round(mv.var, precision + 1))
+
+
+def tabulate2(*args, **kwargs):
+    return str(tabulate(*args, **kwargs)).replace('~', '±')
 
 
 def process(data, book_folder):
@@ -337,7 +357,7 @@ def process(data, book_folder):
         print('Res: %s' % str(res))
 
         res.plot.savefig(os.path.join(book_folder, 'plot_%02d.svg' % i))
-        # res.plot.show()
+        res.plot.show()
 
         headers = ['#', 'Count', 'Downtime, s']
         t = []
@@ -347,10 +367,11 @@ def process(data, book_folder):
             ds += stat.duration.statistic
             downtime_var.append(stat.duration.var)
 
-        downtime_statistic.append(ds)
+        if res.errors:
+            downtime_statistic.append(ds)
 
-        s = tabulate(t, headers=headers, tablefmt="grid")
-        print(s)
+            s = tabulate2(t, headers=headers, tablefmt="grid")
+            print(s)
 
         headers = ['#', 'Count', 'Time to recover, s', 'Operation slowdown, s']
         t = []
@@ -363,20 +384,22 @@ def process(data, book_folder):
             ss += stat.difference.statistic
             slowdown_var.append(stat.difference.var)
 
-        ttr_statistic.append(ts)
-        slowdown_statistic.append(ss)
+        if res.anomalies:
+            ttr_statistic.append(ts)
+            slowdown_statistic.append(ss)
 
-        s = tabulate(t, headers=headers, tablefmt="grid")
-        print(s)
+            s = tabulate2(t, headers=headers, tablefmt="grid")
+            print(s)
 
     downtime = MeanVar(np.mean(downtime_statistic), np.mean(downtime_var))
     mttr = MeanVar(np.mean(ttr_statistic), np.mean(ttr_var))
     slowdown = MeanVar(np.mean(slowdown_statistic), np.mean(slowdown_var))
 
     headers = ['Downtime, s', 'MTTR, s', 'Operation slowdown, s']
-    t = [[mean_var_to_str(downtime), mean_var_to_str(mttr),
-          mean_var_to_str(slowdown)]]
-    s = str(tabulate(t, headers=headers, tablefmt="grid")).replace('~', '±')
+    t = [[mean_var_to_str(downtime) if downtime_statistic else 'N/A',
+          mean_var_to_str(mttr) if ttr_statistic else 'N/A',
+          mean_var_to_str(slowdown) if slowdown_statistic else 'N/A']]
+    s = tabulate2(t, headers=headers, tablefmt="grid")
     print(s)
 
 
@@ -384,7 +407,7 @@ def main():
     parser = argparse.ArgumentParser(prog='rally-reliability-report')
     parser.add_argument('-i', '--input', dest='input', required=True,
                         help='Rally raw json output')
-    parser.add_argument('-b', '--book', dest='book',
+    parser.add_argument('-b', '--book', dest='book', required=True,
                         help='folder where to write RST book')
     args = parser.parse_args()
 
