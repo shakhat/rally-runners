@@ -1,0 +1,26 @@
+---
+{% set repeat = repeat|default(3) %}
+  Authenticate.validate_nova:
+{% for iteration in range(repeat) %}
+    -
+      args:
+        repetitions: 1
+      runner:
+        type: "constant_for_duration"
+        duration: 60
+        concurrency: 3
+      context:
+        users:
+          tenants: 2
+          users_per_tenant: 2
+      hooks:
+        -
+          name: fault_injection
+          args:
+            action: restart random keystone service
+          trigger:
+            name: event
+            args:
+              unit: iteration
+              at: [100]
+{% endfor %}

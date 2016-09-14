@@ -21,6 +21,7 @@ import math
 import os
 
 import errno
+from interval import interval
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import stats
@@ -28,7 +29,8 @@ from sklearn import cluster as skl
 from tabulate import tabulate
 
 
-MAX_GAP = 6
+MIN_CLUSTER_WIDTH = 3
+MAX_CLUSTER_GAP = 6
 WINDOW_SIZE = 21
 
 
@@ -55,9 +57,10 @@ def mkdir_tree(path):
             raise
 
 
-def find_clusters(arr, filter_fn, max_gap=MAX_GAP):
+def find_clusters(arr, filter_fn, max_gap=MAX_CLUSTER_GAP,
+                  min_cluster_width=MIN_CLUSTER_WIDTH):
     # filter_fn: y -> [0, 1]
-    clusters = []  # [(start, end)]
+    clusters = interval()
 
     start = None
     end = None
@@ -70,11 +73,13 @@ def find_clusters(arr, filter_fn, max_gap=MAX_GAP):
             end = i
         else:
             if end and i - end > max_gap:
-                clusters.append(Cluster(start, end))
+                if end - start >= min_cluster_width:
+                    clusters |= interval([start, end])
                 start = end = None
 
     if end:
-        clusters.append(Cluster(start, end))
+        if end - start >= MIN_CLUSTER_WIDTH:
+            clusters |= interval([start, end])
 
     return clusters
 
@@ -122,6 +127,7 @@ def process_one_run(data):
     etalon_mean_sem = stats.sem(etalon)
     etalon_p95 = np.percentile(etalon, 95)
     etalon_var = np.var(etalon)
+    etalon_s = np.std(etalon)
 
     print('Hook time: %s' % hook_start_time)
     print('There are %s etalon samples' % len(etalon))
@@ -135,15 +141,16 @@ def process_one_run(data):
     # find errors
     error_clusters = find_clusters(
         (p['error'] for p in table),
-        filter_fn=lambda x: 1 if x else 0
+        filter_fn=lambda x: 1 if x else 0,
+        min_cluster_width=0
     )
-    print('Error clusters: %s' % error_clusters)
+    print('Error clusters: %s' % str(error_clusters))
 
     error_stats = []
 
     for cluster in error_clusters:
-        start_idx = cluster.start
-        end_idx = cluster.end
+        start_idx = int(cluster.inf)
+        end_idx = int(cluster.sup)
         d_start = (table[start_idx]['timestamp'] -
                    table[start_idx - 1]['timestamp']) / 2
         d_end = (table[end_idx + 1]['timestamp'] -
@@ -166,7 +173,7 @@ def process_one_run(data):
     # apply MeanShift clustering algorithm
     x = [p['duration'] for p in table_filtered]
     X = np.array(zip(x, np.zeros(len(x))), dtype=np.float)
-    bandwidth = skl.estimate_bandwidth(X, quantile=0.6)
+    bandwidth = skl.estimate_bandwidth(X, quantile=0.9)
     ms = skl.MeanShift(bandwidth=bandwidth, bin_seeding=True)
     ms.fit(X)
     labels = ms.labels_
@@ -228,14 +235,23 @@ def process_one_run(data):
     #                                           5 * etalon_derivative_s) else 1
     # )
 
-    print('Anomalies: %s' % anomalies)
+    anomalies2 = find_clusters(
+        mean_y,
+        filter_fn=lambda y: 0 if abs(y) < abs(etalon_mean +
+                                              5 * etalon_s) else 1
+    )
+
+    print('Anomalies: %s' % str(anomalies))
+    print('Anomalies2: %s' % str(anomalies2))
     anomaly_stats = []
     filtered2original = dict()
 
+    anomalies = anomalies | anomalies2
+
     for cluster in anomalies:
         # back to original indexing
-        start_idx = table_filtered[cluster.start]['idx']
-        end_idx = table_filtered[cluster.end]['idx']
+        start_idx = table_filtered[int(cluster.inf)]['idx']
+        end_idx = table_filtered[int(cluster.sup)]['idx'] -1
 
         # it means that this item impacted the mean value and caused window
         # to be distinguished
@@ -391,14 +407,20 @@ def process(data, book_folder):
             s = tabulate2(t, headers=headers, tablefmt="grid")
             print(s)
 
-    downtime = MeanVar(np.mean(downtime_statistic), np.mean(downtime_var))
-    mttr = MeanVar(np.mean(ttr_statistic), np.mean(ttr_var))
-    slowdown = MeanVar(np.mean(slowdown_statistic), np.mean(slowdown_var))
+    downtime = None
+    if downtime_statistic:
+        downtime = MeanVar(np.mean(downtime_statistic), np.mean(downtime_var))
+    mttr = None
+    if ttr_statistic:
+        mttr = MeanVar(np.mean(ttr_statistic), np.mean(ttr_var))
+    slowdown = None
+    if slowdown_statistic:
+        slowdown = MeanVar(np.mean(slowdown_statistic), np.mean(slowdown_var))
 
     headers = ['Downtime, s', 'MTTR, s', 'Operation slowdown, s']
-    t = [[mean_var_to_str(downtime) if downtime_statistic else 'N/A',
-          mean_var_to_str(mttr) if ttr_statistic else 'N/A',
-          mean_var_to_str(slowdown) if slowdown_statistic else 'N/A']]
+    t = [[mean_var_to_str(downtime) if downtime else 'N/A',
+          mean_var_to_str(mttr) if mttr else 'N/A',
+          mean_var_to_str(slowdown) if slowdown else 'N/A']]
     s = tabulate2(t, headers=headers, tablefmt="grid")
     print(s)
 
