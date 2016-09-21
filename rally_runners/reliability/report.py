@@ -16,22 +16,31 @@ from __future__ import print_function
 
 import argparse
 import collections
+import errno
+import functools
 import json
 import math
 import os
+import textwrap
 
-import errno
+import jinja2
 from interval import interval
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import stats
 from sklearn import cluster as skl
 from tabulate import tabulate
+import yaml
+
+from rally_runners import utils
 
 
 MIN_CLUSTER_WIDTH = 3
 MAX_CLUSTER_GAP = 6
 WINDOW_SIZE = 21
+
+REPORT_TEMPLATE = 'rally_runners/reliability/templates/report.rst'
+SCENARIOS_DIR = 'rally_runners/reliability/scenarios/'
 
 
 MinMax = collections.namedtuple('MinMax', ('min', 'max'))
@@ -357,10 +366,12 @@ def mean_var_to_str(mv):
 
 
 def tabulate2(*args, **kwargs):
-    return str(tabulate(*args, **kwargs)).replace('~', '±')
+    return (u'%s' % tabulate(*args, **kwargs)).replace('~', u'±')
 
 
-def process(data, book_folder):
+def process(data, book_folder, scenario):
+    scenario_text = '\n'.join('    %s' % line for line in scenario.split('\n'))
+    report = dict(runs=[], scenario=scenario_text)
     downtime_statistic = []
     downtime_var = []
     ttr_statistic = []
@@ -369,11 +380,12 @@ def process(data, book_folder):
     slowdown_var = []
 
     for i, one_run in enumerate(data):
+        report_one_run = {}
         res = process_one_run(one_run)
         print('Res: %s' % str(res))
 
-        res.plot.savefig(os.path.join(book_folder, 'plot_%02d.svg' % i))
-        res.plot.show()
+        res.plot.savefig(os.path.join(book_folder, 'plot_%d.svg' % (i + 1)))
+        # res.plot.show()
 
         headers = ['#', 'Count', 'Downtime, s']
         t = []
@@ -387,6 +399,7 @@ def process(data, book_folder):
             downtime_statistic.append(ds)
 
             s = tabulate2(t, headers=headers, tablefmt="grid")
+            report_one_run['errors_table'] = s
             print(s)
 
         headers = ['#', 'Count', 'Time to recover, s', 'Operation slowdown, s']
@@ -405,7 +418,10 @@ def process(data, book_folder):
             slowdown_statistic.append(ss)
 
             s = tabulate2(t, headers=headers, tablefmt="grid")
+            report_one_run['anomalies_table'] = s
             print(s)
+
+        report['runs'].append(report_one_run)
 
     downtime = None
     if downtime_statistic:
@@ -422,15 +438,40 @@ def process(data, book_folder):
           mean_var_to_str(mttr) if mttr else 'N/A',
           mean_var_to_str(slowdown) if slowdown else 'N/A']]
     s = tabulate2(t, headers=headers, tablefmt="grid")
+    report['summary_table'] = s
     print(s)
 
+    jinja_env = jinja2.Environment()
+    jinja_env.filters['json'] = json.dumps
+    jinja_env.filters['yaml'] = functools.partial(
+        yaml.safe_dump, indent=2, default_flow_style=False)
 
-def make_report(file_name, book_folder):
+    path = utils.resolve_relative_path(REPORT_TEMPLATE)
+    with open(path) as fd:
+        template = fd.read()
+        compiled_template = jinja_env.from_string(template)
+        rendered_template = compiled_template.render(dict(report=report))
+
+        index_path = os.path.join(book_folder, 'index.rst')
+        with open(index_path, 'w') as fd2:
+            fd2.write(rendered_template.encode('utf8'))
+
+
+def make_report(scenario, file_name, book_folder):
+    scenario_dir = utils.resolve_relative_path(SCENARIOS_DIR)
+    scenario_path = os.path.join(scenario_dir, scenario)
+    if not scenario_path.endswith('.yaml'):
+        scenario_path += '.yaml'
+
+    scenario = ''
+    with open(scenario_path) as fd:
+        scenario = fd.read()
+
     with open(file_name) as fd:
         data = json.loads(fd.read())
 
     mkdir_tree(book_folder)
-    process(data, book_folder)
+    process(data, book_folder, scenario)
 
 
 def main():
@@ -439,8 +480,10 @@ def main():
                         help='Rally raw json output')
     parser.add_argument('-b', '--book', dest='book', required=True,
                         help='folder where to write RST book')
+    parser.add_argument('-s', '--scenario', dest='scenario', required=True,
+                        help='Rally scenario')
     args = parser.parse_args()
-    make_report(args.input, args.book)
+    make_report(args.scenario, args.input, args.book)
 
 
 if __name__ == '__main__':

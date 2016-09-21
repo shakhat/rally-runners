@@ -25,20 +25,13 @@ from oslo_concurrency import processutils
 import rally_runners.reliability as me
 import rally_runners.reliability.rally_plugins as plugins
 from rally_runners.reliability import report
+from rally_runners import utils
 
 SCENARIOS_DIR = 'rally_runners/reliability/scenarios/'
 
 
-def resolve_relative_path(file_name):
-    path = os.path.normpath(os.path.join(
-        os.path.dirname(
-            __import__('rally_runners').__file__), '../', file_name))
-    if os.path.exists(path):
-        return path
-
-
 def make_help_options(base, type_filter=None):
-    path = resolve_relative_path(base)
+    path = utils.resolve_relative_path(base)
     files = itertools.chain.from_iterable(
         [map(functools.partial(os.path.join, root), files)
          for root, dirs, files in os.walk(path)])  # list of files in a tree
