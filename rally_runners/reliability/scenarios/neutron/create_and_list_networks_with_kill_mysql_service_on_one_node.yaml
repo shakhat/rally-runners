@@ -8,7 +8,7 @@
       runner:
         type: "constant_for_duration"
         duration: 60
-        concurrency: 3
+        concurrency: 4
       context:
         users:
           tenants: 1
@@ -20,7 +20,7 @@
         -
           name: fault_injection
           args:
-            action: restart random keystone service
+            action: kill mysql service on one node
           trigger:
             name: event
             args:

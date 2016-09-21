@@ -1,23 +1,24 @@
 ---
+{% set repeat = repeat|default(1) %}
   Authenticate.keystone:
+{% for iteration in range(repeat) %}
     -
       runner:
         type: "constant_for_duration"
         duration: 20
-        concurrency: 20
-      sla:
-        max_failure_percent: 0
+        concurrency: 5
       context:
         users:
-          tenants: 2
-          users_per_tenant: 2
+          tenants: 1
+          users_per_tenant: 1
       hooks:
         -
           name: fault_injection
           args:
-            action: kill random keystone service
+            action: kill mysql service on one node
           trigger:
             name: event
             args:
               unit: iteration
               at: [100]
+{% endfor %}

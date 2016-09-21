@@ -1,5 +1,5 @@
 ---
-{% set repeat = repeat|default(5) %}
+{% set repeat = repeat|default(1) %}
   Authenticate.keystone:
 {% for iteration in range(repeat) %}
     -
@@ -7,17 +7,15 @@
         type: "constant_for_duration"
         duration: 20
         concurrency: 5
-      sla:
-        max_failure_percent: 0
       context:
         users:
-          tenants: 2
-          users_per_tenant: 2
+          tenants: 1
+          users_per_tenant: 1
       hooks:
         -
           name: fault_injection
           args:
-            action: restart random keystone service
+            action: restart memcached service on one node
           trigger:
             name: event
             args:

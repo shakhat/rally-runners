@@ -1,23 +1,21 @@
 ---
 {% set repeat = repeat|default(3) %}
-  Authenticate.validate_nova:
+  NovaFlavors.list_flavors:
 {% for iteration in range(repeat) %}
     -
-      args:
-        repetitions: 1
       runner:
         type: "constant_for_duration"
         duration: 60
-        concurrency: 3
+        concurrency: 4
       context:
         users:
-          tenants: 2
-          users_per_tenant: 2
+          tenants: 1
+          users_per_tenant: 1
       hooks:
         -
           name: fault_injection
           args:
-            action: restart random keystone service
+            action: restart keystone service on one node
           trigger:
             name: event
             args:

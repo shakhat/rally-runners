@@ -7,7 +7,7 @@
         flavor:
           name: "m1.micro"
         image:
-          name: "TestVM"
+          name: "(^cirros.*uec$|TestVM)"
         floating_network: "admin_floating_net"
         command:
           script_inline: "echo '{}'"
@@ -38,10 +38,10 @@
         -
           name: fault_injection
           args:
-            action: restart random keystone service
+            action: restart keystone service on one node
           trigger:
             name: event
             args:
               unit: iteration
-              at: [80]
+              at: [60]
 {% endfor %}
