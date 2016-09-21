@@ -425,6 +425,14 @@ def process(data, book_folder):
     print(s)
 
 
+def make_report(file_name, book_folder):
+    with open(file_name) as fd:
+        data = json.loads(fd.read())
+
+    mkdir_tree(book_folder)
+    process(data, book_folder)
+
+
 def main():
     parser = argparse.ArgumentParser(prog='rally-reliability-report')
     parser.add_argument('-i', '--input', dest='input', required=True,
@@ -432,14 +440,7 @@ def main():
     parser.add_argument('-b', '--book', dest='book', required=True,
                         help='folder where to write RST book')
     args = parser.parse_args()
-
-    file_name = args.input
-    with open(file_name) as fd:
-        data = json.loads(fd.read())
-
-    book_folder = args.book
-    mkdir_tree(book_folder)
-    process(data, book_folder)
+    make_report(args.input, args.book)
 
 
 if __name__ == '__main__':
