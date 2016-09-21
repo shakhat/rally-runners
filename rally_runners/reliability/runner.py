@@ -15,6 +15,8 @@
 from __future__ import print_function
 
 import argparse
+import functools
+import itertools
 import os
 import shlex
 
@@ -24,9 +26,39 @@ import rally_runners.reliability as me
 import rally_runners.reliability.rally_plugins as plugins
 from rally_runners.reliability import report
 
+SCENARIOS_DIR = 'rally_runners/reliability/scenarios/'
+
+
+def resolve_relative_path(file_name):
+    path = os.path.normpath(os.path.join(
+        os.path.dirname(
+            __import__('rally_runners').__file__), '../', file_name))
+    if os.path.exists(path):
+        return path
+
+
+def make_help_options(base, type_filter=None):
+    path = resolve_relative_path(base)
+    files = itertools.chain.from_iterable(
+        [map(functools.partial(os.path.join, root), files)
+         for root, dirs, files in os.walk(path)])  # list of files in a tree
+    if type_filter:
+        files = (f for f in files if type_filter(f))  # filtered list
+    rel_files = map(functools.partial(os.path.relpath, start=path), files)
+    return '\n    '.join('%s' % f.partition('.')[0] for f in sorted(rel_files))
+
+
+SCENARIOS_LIST = make_help_options(SCENARIOS_DIR,
+                                   type_filter=lambda x: x.endswith('.yaml'))
+USAGE = """rally-reliability [-h] -s SCENARIO -o OUTPUT -b BOOK
+
+Scenario is one of:
+    %s
+""" % SCENARIOS_LIST
+
 
 def main():
-    parser = argparse.ArgumentParser(prog='rally-reliability')
+    parser = argparse.ArgumentParser(prog='rally-reliability', usage=USAGE)
     parser.add_argument('-s', '--scenario', dest='scenario', required=True,
                         help='Rally scenario')
     parser.add_argument('-o', '--output', dest='output', required=True,
@@ -38,19 +70,20 @@ def main():
     plugin_paths = os.path.dirname(plugins.__file__)
     scenario_dir = os.path.join(os.path.dirname(me.__file__), 'scenarios')
     scenario_path = os.path.join(scenario_dir, args.scenario)
+    if not scenario_path.endswith('.yaml'):
+        scenario_path += '.yaml'
 
-    processutils.execute(
-        ['rally', '--plugin-paths', plugin_paths, 'task', 'start',
-         '--task', scenario_path])
+    run_cmd = ('rally --plugin-paths %(path)s task start --task %(scenario)s' %
+               dict(path=plugin_paths, scenario=scenario_path))
+    print('Executing %s' % run_cmd)
+    command_stdout, command_stderr = processutils.execute(*shlex.split(run_cmd))
 
+    print('Execution is done:\n%s' % command_stdout)
     command_stdout, command_stderr = processutils.execute(
-        *shlex.split('rally task list'))
+        *shlex.split('rally task results'))
 
-    last_task_id = command_stdout.split('\n')[-2]
-
-    processutils.execute(
-        *shlex.split('rally task report %(id)s --out %(output)s' %
-                     dict(id=last_task_id, output=args.output)))
+    with open(args.output, 'w') as fd:
+        fd.write(command_stdout)
 
     report.make_report(args.output, args.book)
 
