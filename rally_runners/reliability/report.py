@@ -111,6 +111,45 @@ def convert_rally_data(data):
     return table, hook_index
 
 
+def indexed_interval_to_time_interval(table, src_interval):
+    start_index = int(src_interval.inf)
+    end_index = int(src_interval.sup)
+
+    if start_index > 0:
+        d_start = (table[start_index].time - table[start_index - 1].time) / 2
+    else:
+        d_start = 0
+
+    if end_index < len(table) - 1:
+        d_end = (table[end_index + 1].time - table[end_index].time) / 2
+    else:
+        d_end = 0
+
+    start_time = table[start_index].time - d_start
+    end_time = table[end_index].time + d_end
+    var = d_start + d_end
+    duration = end_time - start_time
+    print('Error duration %s, variance: %s' % (duration, var))
+    count = sum(1 if p.error else 0 for p in table)
+    print('Count: %s' % count)
+
+    return ErrorClusterStats(start=start_time, end=end_time, count=count,
+                             duration=MeanVar(duration, var))
+
+
+def calculate_error_stats(table):
+    error_clusters = find_clusters(
+        (p.error for p in table),
+        filter_fn=lambda x: 1 if x else 0,
+        min_cluster_width=0
+    )
+    print('Error clusters: %s' % str(error_clusters))
+
+    error_stats = [indexed_interval_to_time_interval(table, cluster)
+                   for cluster in error_clusters]
+    return error_stats
+
+
 def process_one_run(data):
 
     table, hook_index = convert_rally_data(data)
@@ -133,34 +172,7 @@ def process_one_run(data):
     print('Normal test: %s' % str(stats.normaltest(etalon)))
     print('Bayes: %s' % str(stats.bayes_mvs(etalon, 0.95)))
 
-    # find errors
-    error_clusters = find_clusters(
-        (p.error for p in table),
-        filter_fn=lambda x: 1 if x else 0,
-        min_cluster_width=0
-    )
-    print('Error clusters: %s' % str(error_clusters))
-
-    error_stats = []
-
-    for cluster in error_clusters:
-        start_index = int(cluster.inf)
-        end_index = int(cluster.sup)
-        d_start = (table[start_index].time -
-                   table[start_index - 1].time) / 2
-        d_end = (table[end_index + 1].time -
-                 table[end_index].time) / 2
-        start_ts = table[start_index].time - d_start
-        end_ts = table[end_index].time + d_end
-        var = d_start + d_end
-        duration = end_ts - start_ts
-        print('Error duration %s, variance: %s' % (duration, var))
-        count = sum(1 if p.error else 0 for p in table)
-        print('Count: %s' % count)
-
-        error_stats.append(ErrorClusterStats(
-            start=start_ts, end=end_ts, duration=MeanVar(duration, var),
-            count=count))
+    error_stats = calculate_error_stats(table)
 
     # process non-error data
     table_filtered = [p for p in table if not p.error]  # rm errors
