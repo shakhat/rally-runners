@@ -98,19 +98,15 @@ def convert_rally_data(data):
         hook_start_time = results[-1]['timestamp']
 
     table = []
-    for idx, result in enumerate(results):
-        timestamp = result['timestamp'] - start
+    for index, result in enumerate(results):
+        time = result['timestamp'] - start
         duration = result['duration']
 
-        if timestamp + duration < hook_start_time:
-            hook_index = idx
+        if time + duration < hook_start_time:
+            hook_index = index
 
-        table.append({
-            'idx': idx,
-            'timestamp': timestamp,
-            'duration': duration,
-            'error': bool(result['error']),
-        })
+        table.append(DataRow(index=index, time=time, duration=duration, 
+                             error=bool(result['error'])))
 
     return table, hook_index
 
@@ -118,7 +114,7 @@ def convert_rally_data(data):
 def process_one_run(data):
 
     table, hook_index = convert_rally_data(data)
-    etalon = [p['duration'] for p in table[0:hook_index]]
+    etalon = [p.duration for p in table[0:hook_index]]
 
     etalon = np.array(etalon)
     etalon_mean = np.mean(etalon)
@@ -139,7 +135,7 @@ def process_one_run(data):
 
     # find errors
     error_clusters = find_clusters(
-        (p['error'] for p in table),
+        (p.error for p in table),
         filter_fn=lambda x: 1 if x else 0,
         min_cluster_width=0
     )
@@ -148,18 +144,18 @@ def process_one_run(data):
     error_stats = []
 
     for cluster in error_clusters:
-        start_idx = int(cluster.inf)
-        end_idx = int(cluster.sup)
-        d_start = (table[start_idx]['timestamp'] -
-                   table[start_idx - 1]['timestamp']) / 2
-        d_end = (table[end_idx + 1]['timestamp'] -
-                 table[end_idx]['timestamp']) / 2
-        start_ts = table[start_idx]['timestamp'] - d_start
-        end_ts = table[end_idx]['timestamp'] + d_end
+        start_index = int(cluster.inf)
+        end_index = int(cluster.sup)
+        d_start = (table[start_index].time -
+                   table[start_index - 1].time) / 2
+        d_end = (table[end_index + 1].time -
+                 table[end_index].time) / 2
+        start_ts = table[start_index].time - d_start
+        end_ts = table[end_index].time + d_end
         var = d_start + d_end
         duration = end_ts - start_ts
         print('Error duration %s, variance: %s' % (duration, var))
-        count = sum(1 if p['error'] else 0 for p in table)
+        count = sum(1 if p.error else 0 for p in table)
         print('Count: %s' % count)
 
         error_stats.append(ErrorClusterStats(
@@ -167,10 +163,10 @@ def process_one_run(data):
             count=count))
 
     # process non-error data
-    table_filtered = [p for p in table if not p['error']]  # rm errors
+    table_filtered = [p for p in table if not p.error]  # rm errors
 
     # apply MeanShift clustering algorithm
-    x = [p['duration'] for p in table_filtered]
+    x = [p.duration for p in table_filtered]
     X = np.array(zip(x, np.zeros(len(x))), dtype=np.float)
     bandwidth = skl.estimate_bandwidth(X, quantile=0.9)
     ms = skl.MeanShift(bandwidth=bandwidth, bin_seeding=True)
@@ -199,7 +195,7 @@ def process_one_run(data):
 
     # calculate means
 
-    mean_idx = []
+    mean_index = []
     mean_derivative_y = []
     mean_x = []
     mean_y = []
@@ -208,15 +204,15 @@ def process_one_run(data):
         raise Exception('Not enough data points')
 
     for i in range(0, len(table_filtered) - WINDOW_SIZE):
-        durations = [p['duration'] for p in table_filtered[i: i + WINDOW_SIZE]]
+        durations = [p.duration for p in table_filtered[i: i + WINDOW_SIZE]]
 
         mean = np.mean(durations)
 
-        idx = table_filtered[i]['idx']  # current index of window start
-        mean_idx.append(idx)
+        index = table_filtered[i].index  # current index of window start
+        mean_index.append(index)
         mean_y.append(mean)
         mean_x.append(np.mean(
-            [p['timestamp'] for p in table_filtered[i: i + WINDOW_SIZE]]))
+            [p.time for p in table_filtered[i: i + WINDOW_SIZE]]))
 
         if len(mean_y) > 1:
             # calculate derivative
@@ -249,27 +245,27 @@ def process_one_run(data):
 
     for cluster in anomalies:
         # back to original indexing
-        start_idx = table_filtered[int(cluster.inf)]['idx']
-        end_idx = table_filtered[int(cluster.sup)]['idx'] -1
+        start_index = table_filtered[int(cluster.inf)].index
+        end_index = table_filtered[int(cluster.sup)].index -1
 
         # it means that this item impacted the mean value and caused window
         # to be distinguished
-        # start_idx += WINDOW_SIZE - 1
+        # start_index += WINDOW_SIZE - 1
 
-        d_start = (table[start_idx]['timestamp'] -
-                   table[start_idx - 1]['timestamp']) / 2
-        d_end = (table[end_idx + 1]['timestamp'] -
-                 table[end_idx]['timestamp']) / 2
-        start_ts = table[start_idx]['timestamp'] - d_start
-        end_ts = table[end_idx]['timestamp'] + d_end
+        d_start = (table[start_index].time -
+                   table[start_index - 1].time) / 2
+        d_end = (table[end_index + 1].time -
+                 table[end_index].time) / 2
+        start_ts = table[start_index].time - d_start
+        end_ts = table[end_index].time + d_end
         var = d_start + d_end
         duration = end_ts - start_ts
         print('Anomaly duration %s, variance: %s' % (duration, var))
 
-        length = end_idx - start_idx + 1
+        length = end_index - start_index + 1
         print('Anomaly length: %s' % length)
 
-        durations = [p['duration'] for p in table[start_idx: end_idx + 1]]
+        durations = [p.duration for p in table[start_index: end_index + 1]]
         anomaly_mean = np.mean(durations)
         anomaly_var = np.var(durations)
         se = math.sqrt(anomaly_var / length + etalon_var / len(etalon))
@@ -294,11 +290,11 @@ def process_one_run(data):
     print('Anomaly clusters: %s' % anomaly_stats)
 
     # draw the plot
-    x = [p['timestamp'] for p in table]
-    y = [p['duration'] for p in table]
+    x = [p.time for p in table]
+    y = [p.duration for p in table]
 
-    x2 = [p['timestamp'] for p in table if p['error']]
-    y2 = [p['duration'] for p in table if p['error']]
+    x2 = [p.time for p in table if p.error]
+    y2 = [p.duration for p in table if p.error]
 
     figure = plt.figure()
     plot = figure.add_subplot(111)
@@ -308,7 +304,7 @@ def process_one_run(data):
 
     # highlight etalon
     if len(table) > hook_index:
-        plt.axvspan(0, table[len(etalon) - 1]['timestamp'],
+        plt.axvspan(0, table[len(etalon) - 1].time,
                     color='lime', alpha=0.1, label='Etalon area')
 
     # highlight errors
@@ -382,8 +378,8 @@ def process(data, book_folder, scenario):
         headers = ['#', 'Count', 'Downtime, s']
         t = []
         ds = 0
-        for idx, stat in enumerate(res.errors):
-            t.append([idx + 1, stat.count, mean_var_to_str(stat.duration)])
+        for index, stat in enumerate(res.errors):
+            t.append([index + 1, stat.count, mean_var_to_str(stat.duration)])
             ds += stat.duration.statistic
             downtime_var.append(stat.duration.var)
 
@@ -397,8 +393,8 @@ def process(data, book_folder, scenario):
         headers = ['#', 'Count', 'Time to recover, s', 'Operation slowdown, s']
         t = []
         ts = ss = 0
-        for idx, stat in enumerate(res.anomalies):
-            t.append([idx + 1, stat.count, mean_var_to_str(stat.duration),
+        for index, stat in enumerate(res.anomalies):
+            t.append([index + 1, stat.count, mean_var_to_str(stat.duration),
                       mean_var_to_str(stat.difference)])
             ts += stat.duration.statistic
             ttr_var.append(stat.duration.var)
