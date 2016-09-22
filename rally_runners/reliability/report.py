@@ -52,6 +52,8 @@ AnomalyClusterStats = collections.namedtuple(
     ['start', 'end', 'duration', 'count', 'difference'])
 RunResult = collections.namedtuple(
     'RunResult', ['errors', 'anomalies', 'etalon', 'plot'])
+DataRow = collections.namedtuple(
+    'DataRow', ['index', 'time', 'duration', 'error'])
 
 
 def find_clusters(arr, filter_fn, max_gap=MAX_CLUSTER_GAP,
@@ -81,18 +83,12 @@ def find_clusters(arr, filter_fn, max_gap=MAX_CLUSTER_GAP,
     return clusters
 
 
-def process_one_run(data):
-
-    table = []
-    etalon = []
-
+def convert_rally_data(data):
     results = data['result']
-    hooks = data['hooks']
-
-    if not results:
-        return  # skip empty
-
     start = results[0]['timestamp']  # start of the run
+
+    hooks = data['hooks']
+    hook_index = 0
 
     if hooks:
         # when the hook started
@@ -101,22 +97,28 @@ def process_one_run(data):
         # let all data be etalon
         hook_start_time = results[-1]['timestamp']
 
-    # convert Rally data into our table
+    table = []
     for idx, result in enumerate(results):
         timestamp = result['timestamp'] - start
         duration = result['duration']
 
-        row = {
+        if timestamp + duration < hook_start_time:
+            hook_index = idx
+
+        table.append({
             'idx': idx,
             'timestamp': timestamp,
             'duration': duration,
             'error': bool(result['error']),
-        }
+        })
 
-        if timestamp + duration < hook_start_time:
-            etalon.append(duration)
+    return table, hook_index
 
-        table.append(row)
+
+def process_one_run(data):
+
+    table, hook_index = convert_rally_data(data)
+    etalon = [p['duration'] for p in table[0:hook_index]]
 
     etalon = np.array(etalon)
     etalon_mean = np.mean(etalon)
@@ -126,7 +128,7 @@ def process_one_run(data):
     etalon_var = np.var(etalon)
     etalon_s = np.std(etalon)
 
-    print('Hook time: %s' % hook_start_time)
+    print('Hook index: %s' % hook_index)
     print('There are %s etalon samples' % len(etalon))
     print('Etalon mean: %s (±%s)' % (etalon_mean, etalon_mean_sem))
     print('Etalon median: %s' % etalon_median)
@@ -192,7 +194,7 @@ def process_one_run(data):
         filter_fn=lambda y: y
     )
 
-    if not hooks:  # disable anomalies when no hooks specified
+    if len(table) == hook_index:  # disable anomalies when no hooks specified
         anomalies = []
 
     # calculate means
@@ -305,7 +307,7 @@ def process_one_run(data):
     plot.set_ylim(0)
 
     # highlight etalon
-    if hooks:
+    if len(table) > hook_index:
         plt.axvspan(0, table[len(etalon) - 1]['timestamp'],
                     color='lime', alpha=0.1, label='Etalon area')
 
