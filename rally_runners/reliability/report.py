@@ -314,20 +314,20 @@ def process_one_run(data):
     plot.plot(x2, y2, 'r.', label='Failed operations')
     plot.set_ylim(0)
 
+    plot.axhline(abs(etalon_mean + 5 * etalon_s), color='gray')
+
     # highlight etalon
     if len(table) > hook_index:
-        plt.axvspan(0, table[len(etalon) - 1].time,
-                    color='lime', alpha=0.1, label='Etalon area')
-
-    # highlight errors
-    for c in error_stats:
-        plt.axvspan(c.start, c.end, color='red', alpha=0.4,
-                    label='Errors area')
+        plot.axvspan(0, table[len(etalon) - 1].time,
+                    color='#b0efa0', label='Etalon area')
 
     # highlight anomalies
     for c in anomaly_stats:
-        plt.axvspan(c.start, c.end, color='orange', alpha=0.2,
-                    label='Anomaly area')
+        plot.axvspan(c.start, c.end, color='#ffefa8', label='Anomaly area')
+
+    # highlight errors
+    for c in error_stats:
+        plot.axvspan(c.start, c.end, color='#ffc0a7', label='Errors area')
 
     # draw mean
     plot.plot(mean_x, mean_y, 'cyan', label='Mean duration')
@@ -337,7 +337,7 @@ def process_one_run(data):
     plot.set_ylabel('duration, s')
 
     # add legend
-    legend = plt.legend(loc='right', shadow=True)
+    legend = plot.legend(loc='right', shadow=True)
     for label in legend.get_texts():
         label.set_fontsize('small')
 
