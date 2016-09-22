@@ -12,8 +12,7 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-from __future__ import print_function
-
+import errno
 import os
 
 
@@ -23,3 +22,13 @@ def resolve_relative_path(file_name):
             __import__('rally_runners').__file__), '../', file_name))
     if os.path.exists(path):
         return path
+
+
+def mkdir_tree(path):
+    try:
+        os.makedirs(path)
+    except OSError as exc:
+        if exc.errno == errno.EEXIST and os.path.isdir(path):
+            pass
+        else:
+            raise

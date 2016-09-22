@@ -16,15 +16,13 @@ from __future__ import print_function
 
 import argparse
 import collections
-import errno
 import functools
 import json
 import math
 import os
-import textwrap
 
-import jinja2
 from interval import interval
+import jinja2
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import stats
@@ -54,16 +52,6 @@ AnomalyClusterStats = collections.namedtuple(
     ['start', 'end', 'duration', 'count', 'difference'])
 RunResult = collections.namedtuple(
     'RunResult', ['errors', 'anomalies', 'etalon', 'plot'])
-
-
-def mkdir_tree(path):
-    try:
-        os.makedirs(path)
-    except OSError as exc:
-        if exc.errno == errno.EEXIST and os.path.isdir(path):
-            pass
-        else:
-            raise
 
 
 def find_clusters(arr, filter_fn, max_gap=MAX_CLUSTER_GAP,
@@ -472,7 +460,7 @@ def make_report(scenario, file_name, book_folder):
     with open(file_name) as fd:
         data = json.loads(fd.read())
 
-    mkdir_tree(book_folder)
+    utils.mkdir_tree(book_folder)
     process(data, book_folder, scenario)
 
 
