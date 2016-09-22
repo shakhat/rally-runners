@@ -310,9 +310,11 @@ def process_one_run(data):
     x2 = [p['timestamp'] for p in table if p['error']]
     y2 = [p['duration'] for p in table if p['error']]
 
-    plt.plot(x, y, 'b.', label='Successful operations')
-    plt.plot(x2, y2, 'r.', label='Failed operations')
-    plt.ylim(0)
+    figure = plt.figure()
+    plot = figure.add_subplot(111)
+    plot.plot(x, y, 'b.', label='Successful operations')
+    plot.plot(x2, y2, 'r.', label='Failed operations')
+    plot.set_ylim(0)
 
     # highlight etalon
     if hooks:
@@ -330,11 +332,11 @@ def process_one_run(data):
                     label='Anomaly area')
 
     # draw mean
-    plt.plot(mean_x, mean_y, 'cyan', label='Mean duration')
+    plot.plot(mean_x, mean_y, 'cyan', label='Mean duration')
 
-    plt.grid(True)
-    plt.xlabel('time, s')
-    plt.ylabel('duration, s')
+    plot.grid(True)
+    plot.set_xlabel('time, s')
+    plot.set_ylabel('duration, s')
 
     # add legend
     legend = plt.legend(loc='right', shadow=True)
@@ -344,7 +346,7 @@ def process_one_run(data):
     return RunResult(
         errors=error_stats,
         anomalies=anomaly_stats,
-        plot=plt,
+        plot=figure,
         etalon=stats.bayes_mvs(etalon, 0.95),
     )
 
