@@ -45,7 +45,7 @@ MinMax = collections.namedtuple('MinMax', ('min', 'max'))
 Mean = collections.namedtuple('Mean', ('statistic', 'minmax'))
 MeanVar = collections.namedtuple('MeanVar', ('statistic', 'var'))
 Cluster = collections.namedtuple('Cluster', ['start', 'end'])
-ErrorClusterStats = collections.namedtuple(
+ClusterStats = collections.namedtuple(
     'ErrorClusterStats', ['start', 'end', 'duration', 'count'])
 AnomalyClusterStats = collections.namedtuple(
     'AnomalyClusterStats',
@@ -129,25 +129,51 @@ def indexed_interval_to_time_interval(table, src_interval):
     end_time = table[end_index].time + d_end
     var = d_start + d_end
     duration = end_time - start_time
-    print('Error duration %s, variance: %s' % (duration, var))
-    count = sum(1 if p.error else 0 for p in table)
-    print('Count: %s' % count)
+    count = sum(1 if start_time <= p.time <= end_time else 0 for p in table)
 
-    return ErrorClusterStats(start=start_time, end=end_time, count=count,
-                             duration=MeanVar(duration, var))
+    return ClusterStats(start=start_time, end=end_time, count=count,
+                        duration=MeanVar(duration, var))
 
 
 def calculate_error_stats(table):
+    """Calculates error statistics
+
+    :param table:
+    :return: list of time intervals where errors occur
+    """
     error_clusters = find_clusters(
         (p.error for p in table),
         filter_fn=lambda x: 1 if x else 0,
         min_cluster_width=0
     )
-    print('Error clusters: %s' % str(error_clusters))
-
     error_stats = [indexed_interval_to_time_interval(table, cluster)
                    for cluster in error_clusters]
     return error_stats
+
+
+def calculate_anomalies_stats(table, quantile=0.9):
+    """Find anomalies
+
+    :param quantile: float, default 0.3
+    :param table:
+    :return: list of time intervals where anomalies occur
+    """
+    table = [p for p in table if not p.error]  # rm errors
+    x = [p.duration for p in table]
+    X = np.array(zip(x, np.zeros(len(x))), dtype=np.float)
+    bandwidth = skl.estimate_bandwidth(X, quantile=quantile)
+    mean_shift_algo = skl.MeanShift(bandwidth=bandwidth, bin_seeding=True)
+    mean_shift_algo.fit(X)
+    labels = mean_shift_algo.labels_
+    lm = stats.mode(labels)
+
+    # filter out the largest cluster
+    vl = [(0 if labels[i] == lm.mode else 1) for i, p in enumerate(x)]
+
+    anomaly_clusters = find_clusters(vl, filter_fn=lambda y: y)
+    anomaly_stats = [indexed_interval_to_time_interval(table, cluster)
+                     for cluster in anomaly_clusters]
+    return anomaly_stats
 
 
 def process_one_run(data):
@@ -173,37 +199,13 @@ def process_one_run(data):
     print('Bayes: %s' % str(stats.bayes_mvs(etalon, 0.95)))
 
     error_stats = calculate_error_stats(table)
+    print(error_stats)
+
+    anomaly_stats_2 = calculate_anomalies_stats(table)
+    print(anomaly_stats_2)
 
     # process non-error data
     table_filtered = [p for p in table if not p.error]  # rm errors
-
-    # apply MeanShift clustering algorithm
-    x = [p.duration for p in table_filtered]
-    X = np.array(zip(x, np.zeros(len(x))), dtype=np.float)
-    bandwidth = skl.estimate_bandwidth(X, quantile=0.9)
-    ms = skl.MeanShift(bandwidth=bandwidth, bin_seeding=True)
-    ms.fit(X)
-    labels = ms.labels_
-    cluster_centers = ms.cluster_centers_
-    labels_unique = np.unique(labels)
-    n_clusters_ = len(labels_unique)
-    lm = stats.mode(labels)
-
-    for k in range(n_clusters_):
-        my_members = labels == k
-        print('cluster {0}: {1}'.format(k, X[my_members, 0]))
-
-    vl = []
-    for i, p in enumerate(x):
-        vl.append(0 if labels[i] == lm.mode else 1)
-
-    anomalies = find_clusters(
-        vl,
-        filter_fn=lambda y: y
-    )
-
-    if len(table) == hook_index:  # disable anomalies when no hooks specified
-        anomalies = []
 
     # calculate means
 
@@ -248,12 +250,11 @@ def process_one_run(data):
                                               5 * etalon_s) else 1
     )
 
-    print('Anomalies: %s' % str(anomalies))
     print('Anomalies2: %s' % str(anomalies2))
     anomaly_stats = []
     filtered2original = dict()
 
-    anomalies = anomalies | anomalies2
+    anomalies = anomalies2
 
     for cluster in anomalies:
         # back to original indexing
@@ -321,9 +322,13 @@ def process_one_run(data):
         plot.axvspan(0, table[len(etalon) - 1].time,
                     color='#b0efa0', label='Etalon area')
 
+    # highlight anomalies 2
+    for c in anomaly_stats_2:
+        plot.axvspan(c.start, c.end, color='#fff8bf', label='Anomaly area')
+
     # highlight anomalies
     for c in anomaly_stats:
-        plot.axvspan(c.start, c.end, color='#ffefa8', label='Anomaly area')
+        plot.axvspan(c.start, c.end, color='#f8efa8', label='Anomaly area')
 
     # highlight errors
     for c in error_stats:
