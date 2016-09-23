@@ -46,12 +46,13 @@ Mean = collections.namedtuple('Mean', ('statistic', 'minmax'))
 MeanVar = collections.namedtuple('MeanVar', ('statistic', 'var'))
 Cluster = collections.namedtuple('Cluster', ['start', 'end'])
 ClusterStats = collections.namedtuple(
-    'ErrorClusterStats', ['start', 'end', 'duration', 'count'])
-AnomalyClusterStats = collections.namedtuple(
-    'AnomalyClusterStats',
-    ['start', 'end', 'duration', 'count', 'difference'])
+    'ClusterStats', ['start', 'end', 'duration', 'count'])
+DegradationClusterStats = collections.namedtuple(
+    'DegradationClusterStats',
+    ['start', 'end', 'duration', 'count', 'degradation'])
 RunResult = collections.namedtuple(
-    'RunResult', ['errors', 'anomalies', 'etalon', 'plot'])
+    'RunResult', ['errors', 'anomalies', 'degradation', 'etalon', 'plot'])
+SmoothData = collections.namedtuple('SmoothData', ['time', 'duration', 'var'])
 DataRow = collections.namedtuple(
     'DataRow', ['index', 'time', 'duration', 'error'])
 
@@ -176,6 +177,95 @@ def calculate_anomalies_stats(table, quantile=0.9):
     return anomaly_stats
 
 
+def smooth_data(table, window_size):
+    """Calculate mean for the data
+
+    :param table:
+    :param window_size:
+    :return: list of points in mean data
+    """
+    table = [p for p in table if not p.error]  # rm errors
+    smooth = []
+
+    for i in range(0, len(table) - window_size):
+        durations = [p.duration for p in table[i: i + window_size]]
+
+        time = np.mean([p.time for p in table[i: i + window_size]])
+        duration = np.mean(durations)
+        var = abs(
+            time - np.mean([p.time for p in table[i + 1: i + window_size - 1]]))
+
+        smooth.append(SmoothData(time=time, duration=duration, var=var))
+
+    return smooth
+
+
+def calculate_degradation_cluster_stats(table, smooth, etalon):
+    table = [p for p in table if not p.error]  # rm errors
+    if len(table) <= WINDOW_SIZE:
+        return []
+
+    etalon_mean = np.mean(etalon)
+    etalon_var = np.var(etalon)
+    etalon_s = np.std(etalon)
+    threshold = etalon_mean + 5 * etalon_s
+
+    mean_times = [p.time for p in smooth]
+    mean_durations = [p.duration for p in smooth]
+    mean_vars = [p.var for p in smooth]
+
+    clusters = find_clusters(
+        mean_durations, filter_fn=lambda y: 0 if abs(y) < threshold else 1)
+
+    # calculate cluster duration
+    cluster_stats = []
+    for cluster in clusters:
+        start_idx = int(cluster.inf)
+        end_idx = int(cluster.sup)
+        start_time = mean_times[start_idx]
+        end_time = mean_times[end_idx]
+        duration = end_time - start_time
+        count = sum(1 if start_time < p.time < end_time else 0 for p in table)
+        var = np.mean(mean_vars[start_idx: end_idx])
+
+        cluster_stats.append(
+            ClusterStats(start=start_time, end=end_time, count=count,
+                         duration=MeanVar(duration, var)))
+
+    # calculate degradation for every cluster
+    degradation_cluster_stats = []
+    for cluster in cluster_stats:
+        start_time = cluster.start
+        end_time = cluster.end
+
+        # durations
+        durations = []
+        for p in table:
+            if start_time < p.time < end_time:
+                durations.append(p.duration)
+
+        anomaly_mean = np.mean(durations)
+        anomaly_var = np.var(durations)
+        se = math.sqrt(anomaly_var / len(durations) + etalon_var / len(etalon))
+        dof = len(etalon) + len(durations) - 2
+        mean_diff = anomaly_mean - etalon_mean
+        conf_interval = stats.t.interval(0.95, dof, loc=mean_diff, scale=se)
+
+        degradation = MeanVar(
+            mean_diff, np.mean([mean_diff - conf_interval[0],
+                                conf_interval[1] - mean_diff]))
+
+        print('Mean diff: %s' % mean_diff)
+        print('Conf int: %s' % str(conf_interval))
+
+        degradation_cluster_stats.append(DegradationClusterStats(
+            start=start_time, end=end_time, duration=cluster.duration,
+            degradation=degradation, count=cluster.count
+        ))
+
+    return degradation_cluster_stats
+
+
 def process_one_run(data):
 
     table, hook_index = convert_rally_data(data)
@@ -198,109 +288,19 @@ def process_one_run(data):
     print('Normal test: %s' % str(stats.normaltest(etalon)))
     print('Bayes: %s' % str(stats.bayes_mvs(etalon, 0.95)))
 
+    # Calculate stats
     error_stats = calculate_error_stats(table)
-    print(error_stats)
 
-    anomaly_stats_2 = calculate_anomalies_stats(table)
-    print(anomaly_stats_2)
+    anomaly_stats = calculate_anomalies_stats(table)
 
-    # process non-error data
-    table_filtered = [p for p in table if not p.error]  # rm errors
-
-    # calculate means
-
-    mean_index = []
-    mean_derivative_y = []
-    mean_x = []
-    mean_y = []
-
-    if len(table_filtered) <= WINDOW_SIZE:
-        raise Exception('Not enough data points')
-
-    for i in range(0, len(table_filtered) - WINDOW_SIZE):
-        durations = [p.duration for p in table_filtered[i: i + WINDOW_SIZE]]
-
-        mean = np.mean(durations)
-
-        index = table_filtered[i].index  # current index of window start
-        mean_index.append(index)
-        mean_y.append(mean)
-        mean_x.append(np.mean(
-            [p.time for p in table_filtered[i: i + WINDOW_SIZE]]))
-
-        if len(mean_y) > 1:
-            # calculate derivative
-            mean_prev = mean_y[-2]
-            loc = mean - mean_prev
-            mean_derivative_y.append(loc)
-
-    etalon_derivative_mean = np.mean(mean_derivative_y[:len(etalon)])
-    etalon_derivative_s = np.std(mean_derivative_y[:len(etalon)])
-
-    # find anomalies
-    # anomalies = find_clusters(
-    #     mean_derivative_y,
-    #     filter_fn=lambda y: 0 if abs(y) < abs(etalon_derivative_mean +
-    #                                           5 * etalon_derivative_s) else 1
-    # )
-
-    anomalies2 = find_clusters(
-        mean_y,
-        filter_fn=lambda y: 0 if abs(y) < abs(etalon_mean +
-                                              5 * etalon_s) else 1
-    )
-
-    print('Anomalies2: %s' % str(anomalies2))
-    anomaly_stats = []
-    filtered2original = dict()
-
-    anomalies = anomalies2
-
-    for cluster in anomalies:
-        # back to original indexing
-        start_index = table_filtered[int(cluster.inf)].index
-        end_index = table_filtered[int(cluster.sup)].index -1
-
-        # it means that this item impacted the mean value and caused window
-        # to be distinguished
-        # start_index += WINDOW_SIZE - 1
-
-        d_start = (table[start_index].time -
-                   table[start_index - 1].time) / 2
-        d_end = (table[end_index + 1].time -
-                 table[end_index].time) / 2
-        start_ts = table[start_index].time - d_start
-        end_ts = table[end_index].time + d_end
-        var = d_start + d_end
-        duration = end_ts - start_ts
-        print('Anomaly duration %s, variance: %s' % (duration, var))
-
-        length = end_index - start_index + 1
-        print('Anomaly length: %s' % length)
-
-        durations = [p.duration for p in table[start_index: end_index + 1]]
-        anomaly_mean = np.mean(durations)
-        anomaly_var = np.var(durations)
-        se = math.sqrt(anomaly_var / length + etalon_var / len(etalon))
-        dof = len(etalon) + length - 2
-        mean_diff = anomaly_mean - etalon_mean
-        conf_interval = stats.t.interval(0.95, dof, loc=mean_diff, scale=se)
-
-        difference = MeanVar(mean_diff,
-                             np.mean([mean_diff - conf_interval[0],
-                                      conf_interval[1] - mean_diff]))
-
-        print('Mean diff: %s' % mean_diff)
-        print('Conf int: %s' % str(conf_interval))
-
-        anomaly_stats.append(AnomalyClusterStats(
-            start=start_ts, end=end_ts, duration=MeanVar(duration, var),
-            difference=difference, count=length
-        ))
+    smooth = smooth_data(table, window_size=WINDOW_SIZE)
+    degradation_cluster_stats = calculate_degradation_cluster_stats(
+        table, smooth, etalon)
 
     # print stats
     print('Error clusters: %s' % error_stats)
     print('Anomaly clusters: %s' % anomaly_stats)
+    print('Degradation cluster stats: %s' % degradation_cluster_stats)
 
     # draw the plot
     x = [p.time for p in table]
@@ -315,16 +315,16 @@ def process_one_run(data):
     plot.plot(x2, y2, 'r.', label='Failed operations')
     plot.set_ylim(0)
 
-    plot.axhline(abs(etalon_mean + 5 * etalon_s), color='gray')
+    plot.axhline(abs(etalon_mean + 5 * etalon_s), color='violet')
 
     # highlight etalon
     if len(table) > hook_index:
         plot.axvspan(0, table[len(etalon) - 1].time,
                     color='#b0efa0', label='Etalon area')
 
-    # highlight anomalies 2
-    for c in anomaly_stats_2:
-        plot.axvspan(c.start, c.end, color='#fff8bf', label='Anomaly area')
+    # highlight anomalies
+    for c in anomaly_stats:
+        plot.axvspan(c.start, c.end, color='#f0f0f0', label='Anomaly area')
 
     # highlight anomalies
     for c in anomaly_stats:
@@ -335,7 +335,8 @@ def process_one_run(data):
         plot.axvspan(c.start, c.end, color='#ffc0a7', label='Errors area')
 
     # draw mean
-    plot.plot(mean_x, mean_y, 'cyan', label='Mean duration')
+    plot.plot([p.time for p in smooth], [p.duration for p in smooth], 'cyan',
+              label='Mean duration')
 
     plot.grid(True)
     plot.set_xlabel('time, s')
@@ -349,6 +350,7 @@ def process_one_run(data):
     return RunResult(
         errors=error_stats,
         anomalies=anomaly_stats,
+        degradation=degradation_cluster_stats,
         plot=figure,
         etalon=stats.bayes_mvs(etalon, 0.95),
     )
@@ -359,7 +361,10 @@ def round2(number, variance):
 
 
 def mean_var_to_str(mv):
-    precision = int(math.ceil(-(math.log10(mv.var)))) + 1
+    if mv.var == 0:
+        precision = 4
+    else:
+        precision = int(math.ceil(-(math.log10(mv.var)))) + 1
     if precision > 0:
         pattern = '%%.%df' % precision
         pattern_1 = '%%.%df' % (precision)
@@ -410,15 +415,15 @@ def process(data, book_folder, scenario):
         headers = ['#', 'Count', 'Time to recover, s', 'Operation slowdown, s']
         t = []
         ts = ss = 0
-        for index, stat in enumerate(res.anomalies):
+        for index, stat in enumerate(res.degradation):
             t.append([index + 1, stat.count, mean_var_to_str(stat.duration),
-                      mean_var_to_str(stat.difference)])
+                      mean_var_to_str(stat.degradation)])
             ts += stat.duration.statistic
             ttr_var.append(stat.duration.var)
-            ss += stat.difference.statistic
-            slowdown_var.append(stat.difference.var)
+            ss += stat.degradation.statistic
+            slowdown_var.append(stat.degradation.var)
 
-        if res.anomalies:
+        if res.degradation:
             ttr_statistic.append(ts)
             slowdown_statistic.append(ss)
 
