@@ -44,7 +44,8 @@ SCENARIOS_DIR = 'rally_runners/reliability/scenarios/'
 MinMax = collections.namedtuple('MinMax', ('min', 'max'))
 Mean = collections.namedtuple('Mean', ('statistic', 'minmax'))
 MeanVar = collections.namedtuple('MeanVar', ('statistic', 'var'))
-Cluster = collections.namedtuple('Cluster', ['start', 'end'])
+ArrayStats = collections.namedtuple(
+    'ArrayStats', ['mean', 'median', 'p95', 'var', 'std', 'count'])
 ClusterStats = collections.namedtuple(
     'ClusterStats', ['start', 'end', 'duration', 'count'])
 DegradationClusterStats = collections.namedtuple(
@@ -110,6 +111,13 @@ def convert_rally_data(data):
                              error=bool(result['error'])))
 
     return table, hook_index
+
+
+def calculate_array_stats(data):
+    data = np.array(data)
+    return ArrayStats(mean=np.mean(data), median=np.median(data),
+                      p95=np.percentile(data, 95), var=np.var(data),
+                      std=np.std(data), count=len(data))
 
 
 def indexed_interval_to_time_interval(table, src_interval):
@@ -200,22 +208,19 @@ def smooth_data(table, window_size):
     return smooth
 
 
-def calculate_degradation_cluster_stats(table, smooth, etalon):
+def calculate_degradation_cluster_stats(table, smooth, etalon_stats,
+                                        etalon_threshold):
     table = [p for p in table if not p.error]  # rm errors
     if len(table) <= WINDOW_SIZE:
         return []
-
-    etalon_mean = np.mean(etalon)
-    etalon_var = np.var(etalon)
-    etalon_s = np.std(etalon)
-    threshold = etalon_mean + 5 * etalon_s
 
     mean_times = [p.time for p in smooth]
     mean_durations = [p.duration for p in smooth]
     mean_vars = [p.var for p in smooth]
 
     clusters = find_clusters(
-        mean_durations, filter_fn=lambda y: 0 if abs(y) < threshold else 1)
+        mean_durations,
+        filter_fn=lambda y: 0 if abs(y) < etalon_threshold else 1)
 
     # calculate cluster duration
     cluster_stats = []
@@ -246,9 +251,10 @@ def calculate_degradation_cluster_stats(table, smooth, etalon):
 
         anomaly_mean = np.mean(durations)
         anomaly_var = np.var(durations)
-        se = math.sqrt(anomaly_var / len(durations) + etalon_var / len(etalon))
-        dof = len(etalon) + len(durations) - 2
-        mean_diff = anomaly_mean - etalon_mean
+        se = math.sqrt(anomaly_var / len(durations) +
+                       etalon_stats.var / etalon_stats.count)
+        dof = etalon_stats.count + len(durations) - 2
+        mean_diff = anomaly_mean - etalon_stats.mean
         conf_interval = stats.t.interval(0.95, dof, loc=mean_diff, scale=se)
 
         degradation = MeanVar(
@@ -271,22 +277,11 @@ def process_one_run(data):
     table, hook_index = convert_rally_data(data)
     etalon = [p.duration for p in table[0:hook_index]]
 
-    etalon = np.array(etalon)
-    etalon_mean = np.mean(etalon)
-    etalon_median = np.median(etalon)
-    etalon_mean_sem = stats.sem(etalon)
-    etalon_p95 = np.percentile(etalon, 95)
-    etalon_var = np.var(etalon)
-    etalon_s = np.std(etalon)
+    etalon_stats = calculate_array_stats(etalon)
+    etalon_threshold = abs(etalon_stats.mean + 5 * etalon_stats.std)
 
     print('Hook index: %s' % hook_index)
-    print('There are %s etalon samples' % len(etalon))
-    print('Etalon mean: %s (±%s)' % (etalon_mean, etalon_mean_sem))
-    print('Etalon median: %s' % etalon_median)
-    print('Etalon 95%% percentile: %s' % etalon_p95)
-    print('Variance: %s' % etalon_var)
-    print('Normal test: %s' % str(stats.normaltest(etalon)))
-    print('Bayes: %s' % str(stats.bayes_mvs(etalon, 0.95)))
+    print('Etalon stats: %s' % str(etalon_stats))
 
     # Calculate stats
     error_stats = calculate_error_stats(table)
@@ -295,7 +290,7 @@ def process_one_run(data):
 
     smooth = smooth_data(table, window_size=WINDOW_SIZE)
     degradation_cluster_stats = calculate_degradation_cluster_stats(
-        table, smooth, etalon)
+        table, smooth, etalon_stats, etalon_threshold)
 
     # print stats
     print('Error clusters: %s' % error_stats)
@@ -315,7 +310,7 @@ def process_one_run(data):
     plot.plot(x2, y2, 'r.', label='Failed operations')
     plot.set_ylim(0)
 
-    plot.axhline(abs(etalon_mean + 5 * etalon_s), color='violet')
+    plot.axhline(etalon_threshold, color='violet')
 
     # highlight etalon
     if len(table) > hook_index:
