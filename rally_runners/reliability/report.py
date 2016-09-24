@@ -54,6 +54,8 @@ DegradationClusterStats = collections.namedtuple(
 RunResult = collections.namedtuple(
     'RunResult', ['error_area', 'anomaly_area', 'degradation_area', 'etalon',
                   'plot'])
+SummaryResult = collections.namedtuple(
+    'SummaryResult', ['run_results', 'mttr', 'degradation', 'downtime'])
 SmoothData = collections.namedtuple('SmoothData', ['time', 'duration', 'var'])
 DataRow = collections.namedtuple(
     'DataRow', ['index', 'time', 'duration', 'error'])
@@ -352,6 +354,53 @@ def process_one_run(data):
     )
 
 
+def process_all_runs(runs):
+
+    run_results = []
+    downtime_statistic = []
+    downtime_var = []
+    ttr_statistic = []
+    ttr_var = []
+    slowdown_statistic = []
+    slowdown_var = []
+
+    for i, one_run in enumerate(runs):
+        run_result = process_one_run(one_run)
+        run_results.append(run_result)
+
+        ds = 0
+        for index, stat in enumerate(run_result.error_area):
+            ds += stat.duration.statistic
+            downtime_var.append(stat.duration.var)
+
+        if run_result.error_area:
+            downtime_statistic.append(ds)
+
+        ts = ss = 0
+        for index, stat in enumerate(run_result.degradation_area):
+            ts += stat.duration.statistic
+            ttr_var.append(stat.duration.var)
+            ss += stat.degradation.statistic
+            slowdown_var.append(stat.degradation.var)
+
+        if run_result.degradation_area:
+            ttr_statistic.append(ts)
+            slowdown_statistic.append(ss)
+
+    downtime = None
+    if downtime_statistic:
+        downtime = MeanVar(np.mean(downtime_statistic), np.mean(downtime_var))
+    mttr = None
+    if ttr_statistic:
+        mttr = MeanVar(np.mean(ttr_statistic), np.mean(ttr_var))
+    slowdown = None
+    if slowdown_statistic:
+        slowdown = MeanVar(np.mean(slowdown_statistic), np.mean(slowdown_var))
+
+    return SummaryResult(run_results=run_results, mttr=mttr,
+                         degradation=slowdown, downtime=downtime)
+
+
 def round2(number, variance):
     return round(number, int(math.ceil(-(math.log10(variance)))))
 
@@ -378,71 +427,43 @@ def tabulate2(*args, **kwargs):
 def process(data, book_folder, scenario):
     scenario_text = '\n'.join('    %s' % line for line in scenario.split('\n'))
     report = dict(runs=[], scenario=scenario_text)
-    downtime_statistic = []
-    downtime_var = []
-    ttr_statistic = []
-    ttr_var = []
-    slowdown_statistic = []
-    slowdown_var = []
 
-    for i, one_run in enumerate(data):
+    summary = process_all_runs(data)
+    print('Summary: ', str(summary))
+
+    for i, one_run in enumerate(summary.run_results):
         report_one_run = {}
-        res = process_one_run(one_run)
-        print('Res: %s' % str(res))
 
-        res.plot.savefig(os.path.join(book_folder, 'plot_%d.svg' % (i + 1)))
+        one_run.plot.savefig(os.path.join(book_folder, 'plot_%d.svg' % (i + 1)))
         # res.plot.show()
 
         headers = ['#', 'Count', 'Downtime, s']
         t = []
-        ds = 0
-        for index, stat in enumerate(res.error_area):
+        for index, stat in enumerate(one_run.error_area):
             t.append([index + 1, stat.count, mean_var_to_str(stat.duration)])
-            ds += stat.duration.statistic
-            downtime_var.append(stat.duration.var)
 
-        if res.error_area:
-            downtime_statistic.append(ds)
-
+        if one_run.error_area:
             s = tabulate2(t, headers=headers, tablefmt="grid")
             report_one_run['errors_table'] = s
             print(s)
 
         headers = ['#', 'Count', 'Time to recover, s', 'Operation slowdown, s']
         t = []
-        ts = ss = 0
-        for index, stat in enumerate(res.degradation_area):
+        for index, stat in enumerate(one_run.degradation_area):
             t.append([index + 1, stat.count, mean_var_to_str(stat.duration),
                       mean_var_to_str(stat.degradation)])
-            ts += stat.duration.statistic
-            ttr_var.append(stat.duration.var)
-            ss += stat.degradation.statistic
-            slowdown_var.append(stat.degradation.var)
 
-        if res.degradation_area:
-            ttr_statistic.append(ts)
-            slowdown_statistic.append(ss)
-
+        if one_run.degradation_area:
             s = tabulate2(t, headers=headers, tablefmt="grid")
             report_one_run['anomalies_table'] = s
             print(s)
 
         report['runs'].append(report_one_run)
 
-    downtime = None
-    if downtime_statistic:
-        downtime = MeanVar(np.mean(downtime_statistic), np.mean(downtime_var))
-    mttr = None
-    if ttr_statistic:
-        mttr = MeanVar(np.mean(ttr_statistic), np.mean(ttr_var))
-    slowdown = None
-    if slowdown_statistic:
-        slowdown = MeanVar(np.mean(slowdown_statistic), np.mean(slowdown_var))
-
     headers = ['Downtime, s', 'MTTR, s', 'Operation slowdown, s']
-    t = [[mean_var_to_str(downtime) if downtime else 'N/A',
-          mean_var_to_str(mttr) if mttr else 'N/A',
-          mean_var_to_str(slowdown) if slowdown else 'N/A']]
+    t = [[mean_var_to_str(summary.downtime) if summary.downtime else 'N/A',
+          mean_var_to_str(summary.mttr) if summary.mttr else 'N/A',
+          mean_var_to_str(summary.degradation) if summary.degradation else 'N/A']]
     s = tabulate2(t, headers=headers, tablefmt="grid")
     report['summary_table'] = s
     print(s)
