@@ -52,7 +52,8 @@ DegradationClusterStats = collections.namedtuple(
     'DegradationClusterStats',
     ['start', 'end', 'duration', 'count', 'degradation'])
 RunResult = collections.namedtuple(
-    'RunResult', ['errors', 'anomalies', 'degradation', 'etalon', 'plot'])
+    'RunResult', ['error_area', 'anomaly_area', 'degradation_area', 'etalon',
+                  'plot'])
 SmoothData = collections.namedtuple('SmoothData', ['time', 'duration', 'var'])
 DataRow = collections.namedtuple(
     'DataRow', ['index', 'time', 'duration', 'error'])
@@ -144,7 +145,7 @@ def indexed_interval_to_time_interval(table, src_interval):
                         duration=MeanVar(duration, var))
 
 
-def calculate_error_stats(table):
+def calculate_error_area(table):
     """Calculates error statistics
 
     :param table:
@@ -160,7 +161,7 @@ def calculate_error_stats(table):
     return error_stats
 
 
-def calculate_anomalies_stats(table, quantile=0.9):
+def calculate_anomaly_area(table, quantile=0.9):
     """Find anomalies
 
     :param quantile: float, default 0.3
@@ -208,8 +209,8 @@ def smooth_data(table, window_size):
     return smooth
 
 
-def calculate_degradation_cluster_stats(table, smooth, etalon_stats,
-                                        etalon_threshold):
+def calculate_degradation_area(table, smooth, etalon_stats,
+                               etalon_threshold):
     table = [p for p in table if not p.error]  # rm errors
     if len(table) <= WINDOW_SIZE:
         return []
@@ -272,32 +273,14 @@ def calculate_degradation_cluster_stats(table, smooth, etalon_stats,
     return degradation_cluster_stats
 
 
-def process_one_run(data):
+def draw_area(plot, area, color, label):
+    for i, c in enumerate(area):
+        plot.axvspan(c.start, c.end, color=color, label=label)
+        label = None  # show label only once
 
-    table, hook_index = convert_rally_data(data)
-    etalon = [p.duration for p in table[0:hook_index]]
 
-    etalon_stats = calculate_array_stats(etalon)
-    etalon_threshold = abs(etalon_stats.mean + 5 * etalon_stats.std)
-
-    print('Hook index: %s' % hook_index)
-    print('Etalon stats: %s' % str(etalon_stats))
-
-    # Calculate stats
-    error_stats = calculate_error_stats(table)
-
-    anomaly_stats = calculate_anomalies_stats(table)
-
-    smooth = smooth_data(table, window_size=WINDOW_SIZE)
-    degradation_cluster_stats = calculate_degradation_cluster_stats(
-        table, smooth, etalon_stats, etalon_threshold)
-
-    # print stats
-    print('Error clusters: %s' % error_stats)
-    print('Anomaly clusters: %s' % anomaly_stats)
-    print('Degradation cluster stats: %s' % degradation_cluster_stats)
-
-    # draw the plot
+def draw_plot(table, error_area, anomaly_area, degradation_area, etalon,
+              etalon_threshold, hook_index, smooth):
     x = [p.time for p in table]
     y = [p.duration for p in table]
 
@@ -315,19 +298,17 @@ def process_one_run(data):
     # highlight etalon
     if len(table) > hook_index:
         plot.axvspan(0, table[len(etalon) - 1].time,
-                    color='#b0efa0', label='Etalon area')
+                     color='#b0efa0', label='Etalon area')
 
     # highlight anomalies
-    for c in anomaly_stats:
-        plot.axvspan(c.start, c.end, color='#f0f0f0', label='Anomaly area')
+    draw_area(plot, anomaly_area, color='#f0f0f0', label='Anomaly area')
 
-    # highlight anomalies
-    for c in anomaly_stats:
-        plot.axvspan(c.start, c.end, color='#f8efa8', label='Anomaly area')
+    # highlight degradation
+    draw_area(plot, degradation_area, color='#f8efa8',
+              label='Degradation area')
 
     # highlight errors
-    for c in error_stats:
-        plot.axvspan(c.start, c.end, color='#ffc0a7', label='Errors area')
+    draw_area(plot, error_area, color='#ffc0a7', label='Errors area')
 
     # draw mean
     plot.plot([p.time for p in smooth], [p.duration for p in smooth], 'cyan',
@@ -342,10 +323,41 @@ def process_one_run(data):
     for label in legend.get_texts():
         label.set_fontsize('small')
 
+    return figure
+
+
+def process_one_run(data):
+    table, hook_index = convert_rally_data(data)
+    etalon = [p.duration for p in table[0:hook_index]]
+
+    etalon_stats = calculate_array_stats(etalon)
+    etalon_threshold = abs(etalon_stats.mean + 5 * etalon_stats.std)
+
+    print('Hook index: %s' % hook_index)
+    print('Etalon stats: %s' % str(etalon_stats))
+
+    # Calculate stats
+    error_area = calculate_error_area(table)
+
+    anomaly_area = calculate_anomaly_area(table)
+
+    smooth = smooth_data(table, window_size=WINDOW_SIZE)
+    degradation_area = calculate_degradation_area(
+        table, smooth, etalon_stats, etalon_threshold)
+
+    # print stats
+    print('Error area: %s' % error_area)
+    print('Anomaly area: %s' % anomaly_area)
+    print('Degradation area: %s' % degradation_area)
+
+    # draw the plot
+    figure = draw_plot(table, error_area, anomaly_area, degradation_area,
+                       etalon, etalon_threshold, hook_index, smooth)
+
     return RunResult(
-        errors=error_stats,
-        anomalies=anomaly_stats,
-        degradation=degradation_cluster_stats,
+        error_area=error_area,
+        anomaly_area=anomaly_area,
+        degradation_area=degradation_area,
         plot=figure,
         etalon=stats.bayes_mvs(etalon, 0.95),
     )
@@ -395,12 +407,12 @@ def process(data, book_folder, scenario):
         headers = ['#', 'Count', 'Downtime, s']
         t = []
         ds = 0
-        for index, stat in enumerate(res.errors):
+        for index, stat in enumerate(res.error_area):
             t.append([index + 1, stat.count, mean_var_to_str(stat.duration)])
             ds += stat.duration.statistic
             downtime_var.append(stat.duration.var)
 
-        if res.errors:
+        if res.error_area:
             downtime_statistic.append(ds)
 
             s = tabulate2(t, headers=headers, tablefmt="grid")
@@ -410,7 +422,7 @@ def process(data, book_folder, scenario):
         headers = ['#', 'Count', 'Time to recover, s', 'Operation slowdown, s']
         t = []
         ts = ss = 0
-        for index, stat in enumerate(res.degradation):
+        for index, stat in enumerate(res.degradation_area):
             t.append([index + 1, stat.count, mean_var_to_str(stat.duration),
                       mean_var_to_str(stat.degradation)])
             ts += stat.duration.statistic
@@ -418,7 +430,7 @@ def process(data, book_folder, scenario):
             ss += stat.degradation.statistic
             slowdown_var.append(stat.degradation.var)
 
-        if res.degradation:
+        if res.degradation_area:
             ttr_statistic.append(ts)
             slowdown_statistic.append(ss)
 
