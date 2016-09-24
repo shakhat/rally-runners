@@ -224,37 +224,26 @@ def calculate_degradation_area(table, smooth, etalon_stats,
         filter_fn=lambda y: 0 if abs(y) < etalon_threshold else 1)
 
     # calculate cluster duration
-    cluster_stats = []
+    degradation_cluster_stats = []
     for cluster in clusters:
         start_idx = int(cluster.inf)
         end_idx = int(cluster.sup)
         start_time = mean_times[start_idx]
         end_time = mean_times[end_idx]
         duration = end_time - start_time
-        count = sum(1 if start_time < p.time < end_time else 0 for p in table)
         var = np.mean(mean_vars[start_idx: end_idx])
 
-        cluster_stats.append(
-            ClusterStats(start=start_time, end=end_time, count=count,
-                         duration=MeanVar(duration, var)))
-
-    # calculate degradation for every cluster
-    degradation_cluster_stats = []
-    for cluster in cluster_stats:
-        start_time = cluster.start
-        end_time = cluster.end
-
-        # durations
-        durations = []
+        # point durations
+        point_durations = []
         for p in table:
             if start_time < p.time < end_time:
-                durations.append(p.duration)
+                point_durations.append(p.duration)
 
-        anomaly_mean = np.mean(durations)
-        anomaly_var = np.var(durations)
-        se = math.sqrt(anomaly_var / len(durations) +
+        anomaly_mean = np.mean(point_durations)
+        anomaly_var = np.var(point_durations)
+        se = math.sqrt(anomaly_var / len(point_durations) +
                        etalon_stats.var / etalon_stats.count)
-        dof = etalon_stats.count + len(durations) - 2
+        dof = etalon_stats.count + len(point_durations) - 2
         mean_diff = anomaly_mean - etalon_stats.mean
         conf_interval = stats.t.interval(0.95, dof, loc=mean_diff, scale=se)
 
@@ -266,8 +255,8 @@ def calculate_degradation_area(table, smooth, etalon_stats,
         print('Conf int: %s' % str(conf_interval))
 
         degradation_cluster_stats.append(DegradationClusterStats(
-            start=start_time, end=end_time, duration=cluster.duration,
-            degradation=degradation, count=cluster.count
+            start=start_time, end=end_time, duration=MeanVar(duration, var),
+            degradation=degradation, count=len(point_durations)
         ))
 
     return degradation_cluster_stats
