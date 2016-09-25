@@ -406,6 +406,9 @@ def round2(number, variance):
 
 
 def mean_var_to_str(mv):
+    if not mv:
+        return 'N/A'
+
     if mv.var == 0:
         precision = 4
     else:
@@ -437,33 +440,34 @@ def process(data, book_folder, scenario):
         one_run.plot.savefig(os.path.join(book_folder, 'plot_%d.svg' % (i + 1)))
         # res.plot.show()
 
-        headers = ['#', 'Count', 'Downtime, s']
+        headers = ['#', 'Downtime, s']
         t = []
         for index, stat in enumerate(one_run.error_area):
-            t.append([index + 1, stat.count, mean_var_to_str(stat.duration)])
+            t.append([index + 1, mean_var_to_str(stat.duration)])
 
         if one_run.error_area:
             s = tabulate2(t, headers=headers, tablefmt="grid")
             report_one_run['errors_table'] = s
             print(s)
 
-        headers = ['#', 'Count', 'Time to recover, s', 'Operation slowdown, s']
+        headers = ['#', 'Time to recover, s', 'Degradation, s']
         t = []
         for index, stat in enumerate(one_run.degradation_area):
-            t.append([index + 1, stat.count, mean_var_to_str(stat.duration),
+            t.append([index + 1,
+                      mean_var_to_str(stat.duration),
                       mean_var_to_str(stat.degradation)])
 
         if one_run.degradation_area:
             s = tabulate2(t, headers=headers, tablefmt="grid")
-            report_one_run['anomalies_table'] = s
+            report_one_run['degradation_table'] = s
             print(s)
 
         report['runs'].append(report_one_run)
 
-    headers = ['Downtime, s', 'MTTR, s', 'Operation slowdown, s']
-    t = [[mean_var_to_str(summary.downtime) if summary.downtime else 'N/A',
-          mean_var_to_str(summary.mttr) if summary.mttr else 'N/A',
-          mean_var_to_str(summary.degradation) if summary.degradation else 'N/A']]
+    headers = ['Downtime, s', 'MTTR, s', 'Degradation, s']
+    t = [[mean_var_to_str(summary.downtime),
+          mean_var_to_str(summary.mttr),
+          mean_var_to_str(summary.degradation)]]
     s = tabulate2(t, headers=headers, tablefmt="grid")
     report['summary_table'] = s
     print(s)

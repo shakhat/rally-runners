@@ -26,9 +26,9 @@ Errors
 
 {{ item.errors_table }}
 
-Anomalies
-*********
+Degradation
+***********
 
-{{ item.anomalies_table }}
+{{ item.degradation_table }}
 
 {% endfor %}
