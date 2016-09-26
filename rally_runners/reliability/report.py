@@ -12,17 +12,16 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-from __future__ import print_function
-
 import argparse
 import collections
 import functools
 import json
+import logging
 import math
 import os
 
 import matplotlib as mpl
-mpl.use('Agg')
+mpl.use('Agg')  # do not require X server
 
 from interval import interval
 import jinja2
@@ -257,8 +256,8 @@ def calculate_degradation_area(table, smooth, etalon_stats,
             mean_diff, np.mean([mean_diff - conf_interval[0],
                                 conf_interval[1] - mean_diff]))
 
-        print('Mean diff: %s' % mean_diff)
-        print('Conf int: %s' % str(conf_interval))
+        logging.debug('Mean diff: %s' % mean_diff)
+        logging.debug('Conf int: %s' % str(conf_interval))
 
         degradation_cluster_stats.append(DegradationClusterStats(
             start=start_time, end=end_time, duration=MeanVar(duration, var),
@@ -336,8 +335,8 @@ def process_one_run(rally_data):
     etalon_interval = interval([data[WARM_UP_CUTOFF].time,
                                 data[hook_index].time])[0]
 
-    print('Hook index: %s' % hook_index)
-    print('Etalon stats: %s' % str(etalon_stats))
+    logging.debug('Hook index: %s' % hook_index)
+    logging.debug('Etalon stats: %s' % str(etalon_stats))
 
     # Calculate stats
     error_area = calculate_error_area(data)
@@ -349,10 +348,10 @@ def process_one_run(rally_data):
     degradation_area = calculate_degradation_area(
         data, smooth_data, etalon_stats, etalon_threshold)
 
-    # print stats
-    print('Error area: %s' % error_area)
-    print('Anomaly area: %s' % anomaly_area)
-    print('Degradation area: %s' % degradation_area)
+    # logging.debug stats
+    logging.debug('Error area: %s' % error_area)
+    logging.debug('Anomaly area: %s' % anomaly_area)
+    logging.debug('Degradation area: %s' % degradation_area)
 
     return RunResult(
         data=data,
@@ -451,7 +450,7 @@ def process(raw_rally_reports, book_folder, scenario):
     report = dict(runs=[], scenario=scenario_text)
 
     summary = process_all_runs(get_runs(raw_rally_reports))
-    print('Summary: ', str(summary))
+    logging.debug('Summary: %s', summary)
 
     for i, one_run in enumerate(summary.run_results):
         report_one_run = {}
@@ -463,9 +462,8 @@ def process(raw_rally_reports, book_folder, scenario):
         t = [[round2(one_run.etalon_stats.median),
               round2(one_run.etalon_stats.mean),
               round2(one_run.etalon_stats.p95)]]
-        s = tabulate2(t, headers=headers, tablefmt='grid')
-        report_one_run['etalon_table'] = s
-        print(s)
+        report_one_run['etalon_table'] = tabulate2(
+            t, headers=headers, tablefmt='grid')
 
         headers = ['#', 'Downtime, s']
         t = []
@@ -473,9 +471,8 @@ def process(raw_rally_reports, book_folder, scenario):
             t.append([index + 1, mean_var_to_str(stat.duration)])
 
         if one_run.error_area:
-            s = tabulate2(t, headers=headers, tablefmt="grid")
-            report_one_run['errors_table'] = s
-            print(s)
+            report_one_run['errors_table'] = tabulate2(
+                t, headers=headers, tablefmt='grid')
 
         headers = ['#', 'Time to recover, s', 'Degradation, s']
         t = []
@@ -485,9 +482,8 @@ def process(raw_rally_reports, book_folder, scenario):
                       mean_var_to_str(stat.degradation)])
 
         if one_run.degradation_area:
-            s = tabulate2(t, headers=headers, tablefmt="grid")
-            report_one_run['degradation_table'] = s
-            print(s)
+            report_one_run['degradation_table'] = tabulate2(
+                t, headers=headers, tablefmt="grid")
 
         report['runs'].append(report_one_run)
 
@@ -495,9 +491,7 @@ def process(raw_rally_reports, book_folder, scenario):
     t = [[mean_var_to_str(summary.downtime),
           mean_var_to_str(summary.mttr),
           mean_var_to_str(summary.degradation)]]
-    s = tabulate2(t, headers=headers, tablefmt="grid")
-    report['summary_table'] = s
-    print(s)
+    report['summary_table'] = tabulate2(t, headers=headers, tablefmt='grid')
 
     jinja_env = jinja2.Environment()
     jinja_env.filters['json'] = json.dumps
@@ -514,6 +508,8 @@ def process(raw_rally_reports, book_folder, scenario):
         with open(index_path, 'w') as fd2:
             fd2.write(rendered_template.encode('utf8'))
 
+    logging.info('The book is written to: %s', book_folder)
+
 
 def make_report(scenario, raw_rally_file_names, book_folder):
     scenario_dir = utils.resolve_relative_path(SCENARIOS_DIR)
@@ -521,7 +517,6 @@ def make_report(scenario, raw_rally_file_names, book_folder):
     if not scenario_path.endswith('.yaml'):
         scenario_path += '.yaml'
 
-    scenario = ''
     with open(scenario_path) as fd:
         scenario = fd.read()
 
@@ -536,6 +531,7 @@ def make_report(scenario, raw_rally_file_names, book_folder):
 
 def main():
     parser = argparse.ArgumentParser(prog='rally-reliability-report')
+    parser.add_argument('-d', '--debug', action='store_true')
     parser.add_argument('-i', '--input', dest='input', nargs='+',
                         help='Rally raw json output')
     parser.add_argument('-b', '--book', dest='book', required=True,
@@ -543,6 +539,10 @@ def main():
     parser.add_argument('-s', '--scenario', dest='scenario', required=True,
                         help='Rally scenario')
     args = parser.parse_args()
+
+    logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s',
+                        level=logging.DEBUG if args.debug else logging.INFO)
+
     make_report(args.scenario, args.input, args.book)
 
 

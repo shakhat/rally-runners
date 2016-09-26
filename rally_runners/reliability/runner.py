@@ -12,11 +12,10 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-from __future__ import print_function
-
 import argparse
 import functools
 import itertools
+import logging
 import os
 import shlex
 
@@ -52,6 +51,7 @@ Scenario is one of:
 
 def main():
     parser = argparse.ArgumentParser(prog='rally-reliability', usage=USAGE)
+    parser.add_argument('-d', '--debug', action='store_true')
     parser.add_argument('-s', '--scenario', dest='scenario', required=True,
                         help='Rally scenario')
     parser.add_argument('-o', '--output', dest='output', required=True,
@@ -59,6 +59,9 @@ def main():
     parser.add_argument('-b', '--book', dest='book', required=True,
                         help='folder where to write RST book')
     args = parser.parse_args()
+
+    logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s',
+                        level=logging.DEBUG if args.debug else logging.INFO)
 
     plugin_paths = os.path.dirname(plugins.__file__)
     scenario_dir = os.path.join(os.path.dirname(me.__file__), 'scenarios')
@@ -68,11 +71,11 @@ def main():
 
     run_cmd = ('rally --plugin-paths %(path)s task start --task %(scenario)s' %
                dict(path=plugin_paths, scenario=scenario_path))
-    print('Executing %s' % run_cmd)
+    logging.info('Executing %s' % run_cmd)
     command_stdout, command_stderr = processutils.execute(
         *shlex.split(run_cmd))
 
-    print('Execution is done:\n%s' % command_stdout)
+    logging.info('Execution is done: %s' % command_stdout)
     command_stdout, command_stderr = processutils.execute(
         *shlex.split('rally task results'))
 
