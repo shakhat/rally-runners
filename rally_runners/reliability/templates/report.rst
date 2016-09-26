@@ -21,6 +21,11 @@ Run #{{ loop.index }}
 
 .. image:: plot_{{ loop.index }}.svg
 
+Etalon
+******
+
+{{ item.etalon_table }}
+
 Errors
 ******
 

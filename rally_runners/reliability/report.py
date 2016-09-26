@@ -36,6 +36,7 @@ from rally_runners import utils
 MIN_CLUSTER_WIDTH = 3
 MAX_CLUSTER_GAP = 6
 WINDOW_SIZE = 21
+WARM_UP_CUTOFF = 10
 
 REPORT_TEMPLATE = 'rally_runners/reliability/templates/report.rst'
 SCENARIOS_DIR = 'rally_runners/reliability/scenarios/'
@@ -52,8 +53,8 @@ DegradationClusterStats = collections.namedtuple(
     'DegradationClusterStats',
     ['start', 'end', 'duration', 'count', 'degradation'])
 RunResult = collections.namedtuple(
-    'RunResult', ['error_area', 'anomaly_area', 'degradation_area', 'etalon',
-                  'plot'])
+    'RunResult', ['error_area', 'anomaly_area', 'degradation_area',
+                  'etalon_stats', 'plot'])
 SummaryResult = collections.namedtuple(
     'SummaryResult', ['run_results', 'mttr', 'degradation', 'downtime'])
 SmoothData = collections.namedtuple('SmoothData', ['time', 'duration', 'var'])
@@ -319,7 +320,7 @@ def draw_plot(table, error_area, anomaly_area, degradation_area, etalon,
 
 def process_one_run(data):
     table, hook_index = convert_rally_data(data)
-    etalon = [p.duration for p in table[0:hook_index]]
+    etalon = [p.duration for p in table[WARM_UP_CUTOFF:hook_index]]
 
     etalon_stats = calculate_array_stats(etalon)
     etalon_threshold = abs(etalon_stats.mean + 5 * etalon_stats.std)
@@ -350,7 +351,7 @@ def process_one_run(data):
         anomaly_area=anomaly_area,
         degradation_area=degradation_area,
         plot=figure,
-        etalon=stats.bayes_mvs(etalon, 0.95),
+        etalon_stats=etalon_stats,
     )
 
 
@@ -401,8 +402,10 @@ def process_all_runs(runs):
                          degradation=slowdown, downtime=downtime)
 
 
-def round2(number, variance):
-    return round(number, int(math.ceil(-(math.log10(variance)))))
+def round2(number, variance=None):
+    if not variance:
+        variance = number
+    return round(number, int(math.ceil(-(math.log10(variance)))) + 1)
 
 
 def mean_var_to_str(mv):
@@ -439,6 +442,14 @@ def process(data, book_folder, scenario):
 
         one_run.plot.savefig(os.path.join(book_folder, 'plot_%d.svg' % (i + 1)))
         # res.plot.show()
+
+        headers = ['Median, s', 'Mean, s', '95% percentile, s']
+        t = [[round2(one_run.etalon_stats.median),
+              round2(one_run.etalon_stats.mean),
+              round2(one_run.etalon_stats.p95)]]
+        s = tabulate2(t, headers=headers, tablefmt='grid')
+        report_one_run['etalon_table'] = s
+        print(s)
 
         headers = ['#', 'Downtime, s']
         t = []
