@@ -21,6 +21,9 @@ import json
 import math
 import os
 
+import matplotlib as mpl
+mpl.use('Agg')
+
 from interval import interval
 import jinja2
 import matplotlib.pyplot as plt
@@ -53,8 +56,8 @@ DegradationClusterStats = collections.namedtuple(
     'DegradationClusterStats',
     ['start', 'end', 'duration', 'count', 'degradation'])
 RunResult = collections.namedtuple(
-    'RunResult', ['error_area', 'anomaly_area', 'degradation_area',
-                  'etalon_stats', 'plot'])
+    'RunResult', ['data', 'error_area', 'anomaly_area', 'degradation_area',
+                  'etalon_stats', 'etalon_interval', 'smooth_data'])
 SummaryResult = collections.namedtuple(
     'SummaryResult', ['run_results', 'mttr', 'degradation', 'downtime'])
 SmoothData = collections.namedtuple('SmoothData', ['time', 'duration', 'var'])
@@ -111,7 +114,7 @@ def convert_rally_data(data):
         if time + duration < hook_start_time:
             hook_index = index
 
-        table.append(DataRow(index=index, time=time, duration=duration, 
+        table.append(DataRow(index=index, time=time, duration=duration,
                              error=bool(result['error'])))
 
     return table, hook_index
@@ -189,7 +192,7 @@ def calculate_anomaly_area(table, quantile=0.9):
     return anomaly_stats
 
 
-def smooth_data(table, window_size):
+def calculate_smooth_data(table, window_size):
     """Calculate mean for the data
 
     :param table:
@@ -204,8 +207,8 @@ def smooth_data(table, window_size):
 
         time = np.mean([p.time for p in table[i: i + window_size]])
         duration = np.mean(durations)
-        var = abs(
-            time - np.mean([p.time for p in table[i + 1: i + window_size - 1]]))
+        var = abs(time - np.mean(
+            [p.time for p in table[i + 1: i + window_size - 1]]))
 
         smooth.append(SmoothData(time=time, duration=duration, var=var))
 
@@ -271,8 +274,9 @@ def draw_area(plot, area, color, label):
         label = None  # show label only once
 
 
-def draw_plot(table, error_area, anomaly_area, degradation_area, etalon,
-              etalon_threshold, hook_index, smooth):
+def draw_plot(run_result, show_etalon=True, show_errors=True,
+              show_anomalies=False, show_degradation=True):
+    table = run_result.data
     x = [p.time for p in table]
     y = [p.duration for p in table]
 
@@ -285,30 +289,35 @@ def draw_plot(table, error_area, anomaly_area, degradation_area, etalon,
     plot.plot(x2, y2, 'r.', label='Failed operations')
     plot.set_ylim(0)
 
-    plot.axhline(etalon_threshold, color='violet')
-
     # highlight etalon
-    if len(table) > hook_index:
-        plot.axvspan(0, table[len(etalon) - 1].time,
+    if show_etalon:
+        plot.axvspan(run_result.etalon_interval.inf,
+                     run_result.etalon_interval.sup,
                      color='#b0efa0', label='Etalon area')
 
     # highlight anomalies
-    draw_area(plot, anomaly_area, color='#f0f0f0', label='Anomaly area')
+    if show_anomalies:
+        draw_area(plot, run_result.anomaly_area,
+                  color='#f0f0f0', label='Anomaly area')
 
     # highlight degradation
-    draw_area(plot, degradation_area, color='#f8efa8',
-              label='Degradation area')
+    if show_degradation:
+        draw_area(plot, run_result.degradation_area,
+                  color='#f8efa8', label='Degradation area')
 
     # highlight errors
-    draw_area(plot, error_area, color='#ffc0a7', label='Errors area')
+    if show_errors:
+        draw_area(plot, run_result.error_area,
+                  color='#ffc0a7', label='Errors area')
 
     # draw mean
-    plot.plot([p.time for p in smooth], [p.duration for p in smooth], 'cyan',
-              label='Mean duration')
+    plot.plot([p.time for p in run_result.smooth_data],
+              [p.duration for p in run_result.smooth_data],
+              color='cyan', label='Mean duration')
 
     plot.grid(True)
     plot.set_xlabel('time, s')
-    plot.set_ylabel('duration, s')
+    plot.set_ylabel('operation duration, s')
 
     # add legend
     legend = plot.legend(loc='right', shadow=True)
@@ -318,40 +327,41 @@ def draw_plot(table, error_area, anomaly_area, degradation_area, etalon,
     return figure
 
 
-def process_one_run(data):
-    table, hook_index = convert_rally_data(data)
-    etalon = [p.duration for p in table[WARM_UP_CUTOFF:hook_index]]
+def process_one_run(rally_data):
+    data, hook_index = convert_rally_data(rally_data)
+    etalon = [p.duration for p in data[WARM_UP_CUTOFF:hook_index]]
 
     etalon_stats = calculate_array_stats(etalon)
     etalon_threshold = abs(etalon_stats.mean + 5 * etalon_stats.std)
+    etalon_interval = interval([data[WARM_UP_CUTOFF].time,
+                                data[hook_index].time])[0]
 
     print('Hook index: %s' % hook_index)
     print('Etalon stats: %s' % str(etalon_stats))
 
     # Calculate stats
-    error_area = calculate_error_area(table)
+    error_area = calculate_error_area(data)
 
-    anomaly_area = calculate_anomaly_area(table)
+    anomaly_area = calculate_anomaly_area(data)
 
-    smooth = smooth_data(table, window_size=WINDOW_SIZE)
+    smooth_data = calculate_smooth_data(data, window_size=WINDOW_SIZE)
+
     degradation_area = calculate_degradation_area(
-        table, smooth, etalon_stats, etalon_threshold)
+        data, smooth_data, etalon_stats, etalon_threshold)
 
     # print stats
     print('Error area: %s' % error_area)
     print('Anomaly area: %s' % anomaly_area)
     print('Degradation area: %s' % degradation_area)
 
-    # draw the plot
-    figure = draw_plot(table, error_area, anomaly_area, degradation_area,
-                       etalon, etalon_threshold, hook_index, smooth)
-
     return RunResult(
+        data=data,
         error_area=error_area,
         anomaly_area=anomaly_area,
         degradation_area=degradation_area,
-        plot=figure,
         etalon_stats=etalon_stats,
+        etalon_interval=etalon_interval,
+        smooth_data=smooth_data,
     )
 
 
@@ -446,8 +456,8 @@ def process(raw_rally_reports, book_folder, scenario):
     for i, one_run in enumerate(summary.run_results):
         report_one_run = {}
 
-        one_run.plot.savefig(os.path.join(book_folder, 'plot_%d.svg' % (i + 1)))
-        # res.plot.show()
+        plot = draw_plot(one_run)
+        plot.savefig(os.path.join(book_folder, 'plot_%d.svg' % (i + 1)))
 
         headers = ['Median, s', 'Mean, s', '95% percentile, s']
         t = [[round2(one_run.etalon_stats.median),

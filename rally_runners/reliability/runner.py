@@ -69,7 +69,8 @@ def main():
     run_cmd = ('rally --plugin-paths %(path)s task start --task %(scenario)s' %
                dict(path=plugin_paths, scenario=scenario_path))
     print('Executing %s' % run_cmd)
-    command_stdout, command_stderr = processutils.execute(*shlex.split(run_cmd))
+    command_stdout, command_stderr = processutils.execute(
+        *shlex.split(run_cmd))
 
     print('Execution is done:\n%s' % command_stdout)
     command_stdout, command_stderr = processutils.execute(
