@@ -53,12 +53,13 @@ ClusterStats = collections.namedtuple(
     'ClusterStats', ['start', 'end', 'duration', 'count'])
 DegradationClusterStats = collections.namedtuple(
     'DegradationClusterStats',
-    ['start', 'end', 'duration', 'count', 'degradation'])
+    ['start', 'end', 'duration', 'count', 'degradation', 'degradation_ratio'])
 RunResult = collections.namedtuple(
     'RunResult', ['data', 'error_area', 'anomaly_area', 'degradation_area',
                   'etalon_stats', 'etalon_interval', 'smooth_data'])
 SummaryResult = collections.namedtuple(
-    'SummaryResult', ['run_results', 'mttr', 'degradation', 'downtime'])
+    'SummaryResult', ['run_results', 'mttr', 'degradation',
+                      'degradation_ratio', 'downtime'])
 SmoothData = collections.namedtuple('SmoothData', ['time', 'duration', 'var'])
 DataRow = collections.namedtuple(
     'DataRow', ['index', 'time', 'duration', 'error'])
@@ -255,13 +256,18 @@ def calculate_degradation_area(table, smooth, etalon_stats,
         degradation = MeanVar(
             mean_diff, np.mean([mean_diff - conf_interval[0],
                                 conf_interval[1] - mean_diff]))
+        degradation_ratio = MeanVar(
+            anomaly_mean / etalon_stats.mean,
+            np.mean([(mean_diff - conf_interval[0]) / etalon_stats.mean,
+                     (conf_interval[1] - mean_diff) / etalon_stats.mean]))
 
         logging.debug('Mean diff: %s' % mean_diff)
         logging.debug('Conf int: %s' % str(conf_interval))
 
         degradation_cluster_stats.append(DegradationClusterStats(
             start=start_time, end=end_time, duration=MeanVar(duration, var),
-            degradation=degradation, count=len(point_durations)
+            degradation=degradation, degradation_ratio=degradation_ratio,
+            count=len(point_durations)
         ))
 
     return degradation_cluster_stats
@@ -371,8 +377,10 @@ def process_all_runs(runs):
     downtime_var = []
     ttr_statistic = []
     ttr_var = []
-    slowdown_statistic = []
-    slowdown_var = []
+    degradation_statistic = []
+    degradation_var = []
+    degradation_ratio_statistic = []
+    degradation_ratio_var = []
 
     for i, one_run in enumerate(runs):
         run_result = process_one_run(one_run)
@@ -386,16 +394,19 @@ def process_all_runs(runs):
         if run_result.error_area:
             downtime_statistic.append(ds)
 
-        ts = ss = 0
+        ts = ss = sr = 0
         for index, stat in enumerate(run_result.degradation_area):
             ts += stat.duration.statistic
             ttr_var.append(stat.duration.var)
             ss += stat.degradation.statistic
-            slowdown_var.append(stat.degradation.var)
+            degradation_var.append(stat.degradation.var)
+            sr += stat.degradation_ratio.statistic
+            degradation_ratio_var.append(stat.degradation_ratio.var)
 
         if run_result.degradation_area:
             ttr_statistic.append(ts)
-            slowdown_statistic.append(ss)
+            degradation_statistic.append(ss)
+            degradation_ratio_statistic.append(sr)
 
     downtime = None
     if downtime_statistic:
@@ -403,12 +414,18 @@ def process_all_runs(runs):
     mttr = None
     if ttr_statistic:
         mttr = MeanVar(np.mean(ttr_statistic), np.mean(ttr_var))
-    slowdown = None
-    if slowdown_statistic:
-        slowdown = MeanVar(np.mean(slowdown_statistic), np.mean(slowdown_var))
+    degradation = None
+    degradation_ratio = None
+    if degradation_statistic:
+        degradation = MeanVar(np.mean(degradation_statistic),
+                              np.mean(degradation_var))
+        degradation_ratio = MeanVar(np.mean(degradation_ratio_statistic),
+                                    np.mean(degradation_ratio_var))
 
     return SummaryResult(run_results=run_results, mttr=mttr,
-                         degradation=slowdown, downtime=downtime)
+                         degradation=degradation,
+                         degradation_ratio=degradation_ratio,
+                         downtime=downtime)
 
 
 def round2(number, variance=None):
@@ -474,12 +491,14 @@ def process(raw_rally_reports, book_folder, scenario):
             report_one_run['errors_table'] = tabulate2(
                 t, headers=headers, tablefmt='grid')
 
-        headers = ['#', 'Time to recover, s', 'Degradation, s']
+        headers = ['#', 'Time to recover, s', 'Degradation, s',
+                   'Degradation ratio']
         t = []
         for index, stat in enumerate(one_run.degradation_area):
             t.append([index + 1,
                       mean_var_to_str(stat.duration),
-                      mean_var_to_str(stat.degradation)])
+                      mean_var_to_str(stat.degradation),
+                      mean_var_to_str(stat.degradation_ratio)])
 
         if one_run.degradation_area:
             report_one_run['degradation_table'] = tabulate2(
@@ -487,10 +506,11 @@ def process(raw_rally_reports, book_folder, scenario):
 
         report['runs'].append(report_one_run)
 
-    headers = ['Downtime, s', 'MTTR, s', 'Degradation, s']
+    headers = ['Downtime, s', 'MTTR, s', 'Degradation, s', 'Degradation ratio']
     t = [[mean_var_to_str(summary.downtime),
           mean_var_to_str(summary.mttr),
-          mean_var_to_str(summary.degradation)]]
+          mean_var_to_str(summary.degradation),
+          mean_var_to_str(summary.degradation_ratio)]]
     report['summary_table'] = tabulate2(t, headers=headers, tablefmt='grid')
 
     jinja_env = jinja2.Environment()
