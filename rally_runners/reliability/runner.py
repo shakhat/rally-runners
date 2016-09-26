@@ -78,7 +78,7 @@ def main():
     with open(args.output, 'w') as fd:
         fd.write(command_stdout)
 
-    report.make_report(args.output, args.book)
+    report.make_report(args.scenario, [args.output], args.book)
 
 
 if __name__ == '__main__':

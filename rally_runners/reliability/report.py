@@ -430,11 +430,17 @@ def tabulate2(*args, **kwargs):
     return (u'%s' % tabulate(*args, **kwargs)).replace('~', u'±')
 
 
-def process(data, book_folder, scenario):
+def get_runs(raw_rally_reports):
+    for one_report in raw_rally_reports:
+        for one_run in one_report:
+            yield one_run
+
+
+def process(raw_rally_reports, book_folder, scenario):
     scenario_text = '\n'.join('    %s' % line for line in scenario.split('\n'))
     report = dict(runs=[], scenario=scenario_text)
 
-    summary = process_all_runs(data)
+    summary = process_all_runs(get_runs(raw_rally_reports))
     print('Summary: ', str(summary))
 
     for i, one_run in enumerate(summary.run_results):
@@ -499,7 +505,7 @@ def process(data, book_folder, scenario):
             fd2.write(rendered_template.encode('utf8'))
 
 
-def make_report(scenario, file_name, book_folder):
+def make_report(scenario, raw_rally_file_names, book_folder):
     scenario_dir = utils.resolve_relative_path(SCENARIOS_DIR)
     scenario_path = os.path.join(scenario_dir, scenario)
     if not scenario_path.endswith('.yaml'):
@@ -509,16 +515,18 @@ def make_report(scenario, file_name, book_folder):
     with open(scenario_path) as fd:
         scenario = fd.read()
 
-    with open(file_name) as fd:
-        data = json.loads(fd.read())
+    raw_rally_reports = []
+    for file_name in raw_rally_file_names:
+        with open(file_name) as fd:
+            raw_rally_reports.append(json.loads(fd.read()))
 
     utils.mkdir_tree(book_folder)
-    process(data, book_folder, scenario)
+    process(raw_rally_reports, book_folder, scenario)
 
 
 def main():
     parser = argparse.ArgumentParser(prog='rally-reliability-report')
-    parser.add_argument('-i', '--input', dest='input', required=True,
+    parser.add_argument('-i', '--input', dest='input', nargs='+',
                         help='Rally raw json output')
     parser.add_argument('-b', '--book', dest='book', required=True,
                         help='folder where to write RST book')
