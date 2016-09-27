@@ -39,7 +39,7 @@ MIN_CLUSTER_WIDTH = 3  # filter cluster with less items
 MAX_CLUSTER_GAP = 6  # max allowed gap in the cluster (otherwise split them)
 WINDOW_SIZE = 21  # window size for average duration calculation
 WARM_UP_CUTOFF = 10  # drop first N points from etalon
-DEGRADATION_THRESHOLD = 3  # how many sigmas duration differs from etalon mean
+DEGRADATION_THRESHOLD = 4  # how many sigmas duration differs from etalon mean
 
 REPORT_TEMPLATE = 'rally_runners/reliability/templates/report.rst'
 SCENARIOS_DIR = 'rally_runners/reliability/scenarios/'
@@ -422,7 +422,10 @@ def process_all_runs(runs):
         downtime = MeanVar(np.mean(downtime_statistic), np.mean(downtime_var))
     mttr = None
     if ttr_statistic:
-        mttr = MeanVar(np.mean(ttr_statistic), np.mean(ttr_var))
+        ttr_mean = np.mean(ttr_statistic)
+        se = math.sqrt(
+            sum(ttr_var) + np.var(ttr_statistic) / len(ttr_statistic))
+        mttr = MeanVar(ttr_mean, se)
     degradation = None
     degradation_ratio = None
     if degradation_statistic:
