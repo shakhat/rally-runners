@@ -305,7 +305,7 @@ def draw_plot(run_result, show_etalon=True, show_errors=True,
     if show_etalon:
         plot.axvspan(run_result.etalon_interval.inf,
                      run_result.etalon_interval.sup,
-                     color='#b0efa0', label='Etalon')
+                     color='#b0efa0', label='Baseline')
 
     # highlight anomalies
     if show_anomalies:
@@ -320,7 +320,7 @@ def draw_plot(run_result, show_etalon=True, show_errors=True,
     # highlight errors
     if show_errors:
         draw_area(plot, run_result.error_area,
-                  color='#ffc0a7', label='Service downtime')
+                  color='#ffc0a7', label='Downtime')
 
     # draw mean
     plot.plot([p.time for p in run_result.smooth_data],
@@ -468,7 +468,7 @@ def mean_var_to_str(mv):
 
 
 def tabulate2(*args, **kwargs):
-    return (u'%s' % tabulate(*args, **kwargs)).replace('~', u'±')
+    return (u'%s' % tabulate(*args, **kwargs)).replace(' ~', u'\u00A0±')
 
 
 def get_runs(raw_rally_reports):
@@ -477,9 +477,13 @@ def get_runs(raw_rally_reports):
             yield one_run
 
 
-def process(raw_rally_reports, book_folder, scenario):
-    scenario_text = '\n'.join('    %s' % line for line in scenario.split('\n'))
-    report = dict(runs=[], scenario=scenario_text)
+def indent(text, distance):
+    return '\n'.join((' ' * distance + line) for line in text.split('\n'))
+
+
+def process(raw_rally_reports, book_folder, scenario, scenario_name):
+    scenario_text = indent(scenario, 4)
+    report = dict(runs=[], scenario=scenario_text, scenario_name=scenario_name)
 
     summary = process_all_runs(get_runs(raw_rally_reports))
     logging.debug('Summary: %s', summary)
@@ -490,8 +494,10 @@ def process(raw_rally_reports, book_folder, scenario):
         plot = draw_plot(one_run)
         plot.savefig(os.path.join(book_folder, 'plot_%d.svg' % (i + 1)))
 
-        headers = ['Median, s', 'Mean, s', 'Std dev', '95% percentile, s']
-        t = [[round2(one_run.etalon_stats.median),
+        headers = ['Samples', 'Median, s', 'Mean, s', 'Std dev',
+                   '95% percentile, s']
+        t = [[one_run.etalon_stats.count,
+              round2(one_run.etalon_stats.median),
               round2(one_run.etalon_stats.mean),
               round2(one_run.etalon_stats.std),
               round2(one_run.etalon_stats.p95)]]
@@ -522,7 +528,9 @@ def process(raw_rally_reports, book_folder, scenario):
 
         report['runs'].append(report_one_run)
 
-    headers = ['Downtime, s', 'MTTR, s', 'Degradation, s', 'Degradation ratio']
+    headers = ['Service downtime, s', 'MTTR, s',
+               'Absolute performance degradation, s',
+               'Relative performance degradation, ratio']
     t = [[mean_var_to_str(summary.downtime),
           mean_var_to_str(summary.mttr),
           mean_var_to_str(summary.degradation),
@@ -547,9 +555,9 @@ def process(raw_rally_reports, book_folder, scenario):
     logging.info('The book is written to: %s', book_folder)
 
 
-def make_report(scenario, raw_rally_file_names, book_folder):
+def make_report(scenario_name, raw_rally_file_names, book_folder):
     scenario_dir = utils.resolve_relative_path(SCENARIOS_DIR)
-    scenario_path = os.path.join(scenario_dir, scenario)
+    scenario_path = os.path.join(scenario_dir, scenario_name)
     if not scenario_path.endswith('.yaml'):
         scenario_path += '.yaml'
 
@@ -562,7 +570,7 @@ def make_report(scenario, raw_rally_file_names, book_folder):
             raw_rally_reports.append(json.loads(fd.read()))
 
     utils.mkdir_tree(book_folder)
-    process(raw_rally_reports, book_folder, scenario)
+    process(raw_rally_reports, book_folder, scenario, scenario_name)
 
 
 def main():
