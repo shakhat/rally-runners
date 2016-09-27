@@ -35,10 +35,11 @@ import yaml
 from rally_runners import utils
 
 
-MIN_CLUSTER_WIDTH = 3
-MAX_CLUSTER_GAP = 6
-WINDOW_SIZE = 21
-WARM_UP_CUTOFF = 10
+MIN_CLUSTER_WIDTH = 3  # filter cluster with less items
+MAX_CLUSTER_GAP = 6  # max allowed gap in the cluster (otherwise split them)
+WINDOW_SIZE = 21  # window size for average duration calculation
+WARM_UP_CUTOFF = 10  # drop first N points from etalon
+DEGRADATION_THRESHOLD = 3  # how many sigmas duration differs from etalon mean
 
 REPORT_TEMPLATE = 'rally_runners/reliability/templates/report.rst'
 SCENARIOS_DIR = 'rally_runners/reliability/scenarios/'
@@ -56,7 +57,8 @@ DegradationClusterStats = collections.namedtuple(
     ['start', 'end', 'duration', 'count', 'degradation', 'degradation_ratio'])
 RunResult = collections.namedtuple(
     'RunResult', ['data', 'error_area', 'anomaly_area', 'degradation_area',
-                  'etalon_stats', 'etalon_interval', 'smooth_data'])
+                  'etalon_stats', 'etalon_interval', 'etalon_threshold',
+                  'smooth_data'])
 SummaryResult = collections.namedtuple(
     'SummaryResult', ['run_results', 'mttr', 'degradation',
                       'degradation_ratio', 'downtime'])
@@ -245,6 +247,8 @@ def calculate_degradation_area(table, smooth, etalon_stats,
             if start_time < p.time < end_time:
                 point_durations.append(p.duration)
 
+        # calculate difference between means
+        # http://onlinestatbook.com/2/tests_of_means/difference_means.html
         anomaly_mean = np.mean(point_durations)
         anomaly_var = np.var(point_durations)
         se = math.sqrt(anomaly_var / len(point_durations) +
@@ -294,26 +298,29 @@ def draw_plot(run_result, show_etalon=True, show_errors=True,
     plot.plot(x2, y2, 'r.', label='Failed operations')
     plot.set_ylim(0)
 
+    plot.axhline(run_result.etalon_threshold, color='violet',
+                 label='Degradation threshold')
+
     # highlight etalon
     if show_etalon:
         plot.axvspan(run_result.etalon_interval.inf,
                      run_result.etalon_interval.sup,
-                     color='#b0efa0', label='Etalon area')
+                     color='#b0efa0', label='Etalon')
 
     # highlight anomalies
     if show_anomalies:
         draw_area(plot, run_result.anomaly_area,
-                  color='#f0f0f0', label='Anomaly area')
+                  color='#f0f0f0', label='Anomaly')
 
     # highlight degradation
     if show_degradation:
         draw_area(plot, run_result.degradation_area,
-                  color='#f8efa8', label='Degradation area')
+                  color='#f8efa8', label='Degradation')
 
     # highlight errors
     if show_errors:
         draw_area(plot, run_result.error_area,
-                  color='#ffc0a7', label='Errors area')
+                  color='#ffc0a7', label='Service downtime')
 
     # draw mean
     plot.plot([p.time for p in run_result.smooth_data],
@@ -337,7 +344,8 @@ def process_one_run(rally_data):
     etalon = [p.duration for p in data[WARM_UP_CUTOFF:hook_index]]
 
     etalon_stats = calculate_array_stats(etalon)
-    etalon_threshold = abs(etalon_stats.mean + 5 * etalon_stats.std)
+    etalon_threshold = abs(etalon_stats.mean +
+                           DEGRADATION_THRESHOLD * etalon_stats.std)
     etalon_interval = interval([data[WARM_UP_CUTOFF].time,
                                 data[hook_index].time])[0]
 
@@ -366,6 +374,7 @@ def process_one_run(rally_data):
         degradation_area=degradation_area,
         etalon_stats=etalon_stats,
         etalon_interval=etalon_interval,
+        etalon_threshold=etalon_threshold,
         smooth_data=smooth_data,
     )
 
@@ -475,9 +484,10 @@ def process(raw_rally_reports, book_folder, scenario):
         plot = draw_plot(one_run)
         plot.savefig(os.path.join(book_folder, 'plot_%d.svg' % (i + 1)))
 
-        headers = ['Median, s', 'Mean, s', '95% percentile, s']
+        headers = ['Median, s', 'Mean, s', 'Std dev', '95% percentile, s']
         t = [[round2(one_run.etalon_stats.median),
               round2(one_run.etalon_stats.mean),
+              round2(one_run.etalon_stats.std),
               round2(one_run.etalon_stats.p95)]]
         report_one_run['etalon_table'] = tabulate2(
             t, headers=headers, tablefmt='grid')
