@@ -513,8 +513,8 @@ def process(raw_rally_reports, book_folder, scenario, scenario_name):
             report_one_run['errors_table'] = tabulate2(
                 t, headers=headers, tablefmt='grid')
 
-        headers = ['#', 'Time to recover, s', 'Degradation, s',
-                   'Degradation ratio']
+        headers = ['#', 'Time to recover, s', 'Absolute degradation, s',
+                   'Relative degradation']
         t = []
         for index, stat in enumerate(one_run.degradation_area):
             t.append([index + 1,
