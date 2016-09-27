@@ -419,12 +419,15 @@ def process_all_runs(runs):
 
     downtime = None
     if downtime_statistic:
-        downtime = MeanVar(np.mean(downtime_statistic), np.mean(downtime_var))
+        downtime_mean = np.mean(downtime_statistic)
+        se = math.sqrt((sum(downtime_var) +
+                       np.var(downtime_statistic)) / len(downtime_statistic))
+        downtime = MeanVar(downtime_mean, se)
     mttr = None
     if ttr_statistic:
         ttr_mean = np.mean(ttr_statistic)
-        se = math.sqrt(
-            sum(ttr_var) + np.var(ttr_statistic) / len(ttr_statistic))
+        se = math.sqrt((sum(ttr_var) +
+                        np.var(ttr_statistic)) / len(ttr_statistic))
         mttr = MeanVar(ttr_mean, se)
     degradation = None
     degradation_ratio = None
