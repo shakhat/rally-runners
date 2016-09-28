@@ -76,6 +76,9 @@ def process(raw_rally_reports, book_folder, scenario, scenario_name):
     summary = analytics.process_all_runs(get_runs(raw_rally_reports))
     logging.debug('Summary: %s', summary)
 
+    has_errors = False
+    has_degradation = False
+
     for i, one_run in enumerate(summary.run_results):
         report_one_run = {}
 
@@ -98,6 +101,7 @@ def process(raw_rally_reports, book_folder, scenario, scenario_name):
             t.append([index + 1, mean_var_to_str(stat.duration)])
 
         if one_run.error_area:
+            has_errors = True
             report_one_run['errors_table'] = tabulate2(
                 t, headers=headers, tablefmt='grid')
 
@@ -111,6 +115,7 @@ def process(raw_rally_reports, book_folder, scenario, scenario_name):
                       mean_var_to_str(stat.degradation_ratio)])
 
         if one_run.degradation_area:
+            has_degradation = True
             report_one_run['degradation_table'] = tabulate2(
                 t, headers=headers, tablefmt="grid")
 
@@ -124,6 +129,9 @@ def process(raw_rally_reports, book_folder, scenario, scenario_name):
           mean_var_to_str(summary.degradation),
           mean_var_to_str(summary.degradation_ratio)]]
     report['summary_table'] = tabulate2(t, headers=headers, tablefmt='grid')
+
+    report['has_errors'] = has_errors
+    report['has_degradation'] = has_degradation
 
     jinja_env = jinja2.Environment()
     jinja_env.filters['json'] = json.dumps

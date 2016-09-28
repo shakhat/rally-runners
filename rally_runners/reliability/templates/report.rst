@@ -11,6 +11,8 @@ Rally scenario:
 Summary
 -------
 
+{% if report.has_errors or report.has_degradation %}
+
 {{ report.summary_table }}
 
 Metrics:
@@ -22,6 +24,12 @@ Metrics:
       the mean of operation duration during recovery period and the baseline's.
     * `Relative performance degradation` is the ratio between the mean
       of operation duration during recovery period and the baseline's.
+
+{% else %}
+
+No errors nor performance degradation observed.
+
+{% endif %}
 
 Details
 -------
