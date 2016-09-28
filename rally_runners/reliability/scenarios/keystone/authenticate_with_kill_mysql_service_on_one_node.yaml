@@ -3,7 +3,7 @@
     -
       runner:
         type: "constant_for_duration"
-        duration: 30
+        duration: 60
         concurrency: 5
       context:
         users:
@@ -18,4 +18,4 @@
             name: event
             args:
               unit: iteration
-              at: [100]
+              at: [150]
