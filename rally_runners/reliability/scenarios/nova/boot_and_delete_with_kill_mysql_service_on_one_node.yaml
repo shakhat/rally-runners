@@ -9,7 +9,7 @@
         force_delete: false
       runner:
         type: "constant_for_duration"
-        duration: 180
+        duration: 240
         concurrency: 4
       context:
         users:
@@ -19,9 +19,9 @@
         -
           name: fault_injection
           args:
-            action: kill rabbitmq service on one node
+            action: kill mysql service on one node
           trigger:
             name: event
             args:
               unit: iteration
-              at: [50]
+              at: [60]
