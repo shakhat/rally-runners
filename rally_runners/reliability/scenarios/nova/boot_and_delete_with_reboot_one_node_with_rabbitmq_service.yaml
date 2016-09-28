@@ -19,7 +19,7 @@
         -
           name: fault_injection
           args:
-            action: disconnect management network on one node with nova-scheduler service
+            action: reboot one node with rabbitmq service
           trigger:
             name: event
             args:
