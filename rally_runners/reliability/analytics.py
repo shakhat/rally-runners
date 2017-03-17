@@ -82,7 +82,7 @@ def convert_rally_data(data):
 
     if hooks:
         # when the hook started
-        hook_start_time = hooks[0]['started_at'] - start
+        hook_start_time = hooks[0]['results'][0]['started_at'] - start
     else:
         # let all data be etalon
         hook_start_time = results[-1]['timestamp']
